@@ -111,7 +111,10 @@ mode, where code fences fall, where the answer starts, length) and selects train
 a mix policy. Each sampled row group is fetched whole, so it prints the compressed download first
 and caps it at `--max-download-gb` (default 6; the row-group size of the OpenThoughts3 shards is
 unknown here). It writes the dataset, `stats.json` (switching statistics, each candidate
-policy's token shares) and `sample.jsonl`. Not run: it needs Hugging Face.
+policy's token shares) and `sample.jsonl`. Not run: it needs Hugging Face. A CPU test in
+`tests/test_data.py` runs the whole build on a few made-up rows with the cached tokenizer, so
+`tools.check` catches a failure in profiling, selection or writing before a long download is
+wasted on it.
 
 Length policy, proposed: complete rows only, never truncate, and leave out rows longer than
 the training length. Default `equal-domains-16k` (code, math and science get equal loss-token

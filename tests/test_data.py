@@ -1,12 +1,25 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from typing import Any
+
 import pytest
+from datasets import load_from_disk
 from transformers import PreTrainedTokenizerBase
 
-from chained_transformer.data import RowGroup, encode, render, sample_row_groups
+from chained_transformer.data import (
+    MixBuild,
+    RowGroup,
+    build_mix,
+    encode,
+    render,
+    sample_row_groups,
+)
 from chained_transformer.generate import TokenTexts
+from chained_transformer.mix import CANDIDATES
 from chained_transformer.model import load_tokenizer
-from chained_transformer.modes import Mode, ModeTracker, segment_labels
+from chained_transformer.modes import MODE_NAMES, Mode, ModeTracker, segment_labels
 
 
 @pytest.fixture(scope="module")
@@ -61,3 +74,28 @@ def test_row_group_sampling_is_unique_sorted_and_respects_the_download_cap() -> 
     capped = sample_row_groups(groups, 20, seed=0, max_bytes=55)
     assert len(capped) == 5
     assert set(capped) <= set(sample_row_groups(groups, 20, seed=0))
+
+
+def _trace(domain: str, *answers: str) -> dict[str, Any]:
+    turns = [
+        t for a in answers for t in ({"from": "human", "value": "Q?"}, {"from": "gpt", "value": a})
+    ]
+    return {"conversations": turns, "domain": domain, "source": "test"}
+
+
+@pytest.mark.usefixtures("texts_and_tokenizer")
+def test_build_mix_keeps_complete_rows_of_every_domain(tmp_path: Path) -> None:
+    answer = "<think>\nplan {i}\n```python\nprint({i})\n```\n</think>\n\nDone {i}."
+    rows = [_trace(d, answer.format(i=i)) for d in ("code", "math", "science") for i in range(2)]
+    rows += [_trace("math", "<think>\ncut off"), _trace("math", "a", "b")]
+    out = tmp_path / "mix"
+    report = build_mix(MixBuild(out=out), source=lambda: iter(rows))
+    assert report["sample_summary"]["rows"] == 7
+    assert report["sample_summary"]["complete_rows"] == 6
+    assert set(report["policies"]) == set(CANDIDATES)
+    ds = load_from_disk(str(out))
+    assert len(ds) == report["selected"]["rows"] >= 3
+    assert all(ds["complete"]) and set(ds["domain"]) == {"code", "math", "science"}
+    samples = [json.loads(line) for line in (out / "sample.jsonl").read_text().splitlines()]
+    assert len(samples) == 6
+    assert {run["label"] for run in samples[0]["runs"]} == set(MODE_NAMES)
