@@ -48,7 +48,15 @@ Done and verified:
   See the [slice result](../results/ot3-slice-composition/result.md): only 27.6% of rows are
   complete, and `code`/`answer` get about 1%/4% of loss tokens.
 
-Blocked: the GPU smoke (`python -m tools.gpu_smoke`) has not run. On 2026-11-26 at about
+GPU smoke on the 2080 Ti (2026-11-26, raw logs on that host in
+`artifacts/smoke/2080-20261126-004755/`, disposable once the 5080 smoke runs): bf16 generation
+with identical modes matched the base tokens exactly for `full` and `lora`; `moe` diverged
+(max logit difference 0.4 to 0.66), most likely because expert outputs are weighted and summed
+in bf16. fp32 `full` matched exactly. Every training run, even `sft`, ran out of memory on the
+11 GB card at 4,096 tokens, failing in torchao's stochastic-rounding step; why `sft` needs over
+10 GB is not yet understood. The investigation stopped there.
+
+Blocked on the 5080: the GPU smoke (`python -m tools.gpu_smoke`) has not run. On 2026-11-26 at about
 00:00, BitDraft's 4-bit control run (`control-run-3`, pueue `gpu` group) held 12.2 GB of the
 GPU at 99% utilisation. No GPU memory or step-time numbers exist yet.
 
