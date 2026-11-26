@@ -126,6 +126,8 @@ On the 5080:
 uv run --locked --no-sync python -m chained_transformer.data --policy equal-domains-16k
 ```
 
+Stage by stage, with every output field: [docs/data.md](../docs/data.md).
+
 ## 4. Probes and design note
 
 - `tools/mode_probe.py`: logistic probes on base Qwen3-0.6B hidden states per layer, for
@@ -146,6 +148,16 @@ the math kernel. Tests added (unrun): the optimizer gives bit-identical params a
 uneven last chunk (quantized, small and large-but-unquantizable tensors), per-token losses do
 not depend on the loss chunk, `make_batch` cuts long rows correctly, and the memory check's
 verdict. Checked and fine: the MoE router has no bias, so routing without it is correct.
+The memory check also refuses to measure while another process holds the GPU (exit 2, as
+`tools.gpu_smoke` does), since that process's memory would count against every arm.
+
+A second, independent read against the pinned sources found one serious bug: `MoEMLP` stored its
+balance loss in the forward that checkpointing reruns during backward, and that kept each
+layer's recomputed activations alive until the next step, about what checkpointing saves. The
+`moe` arm would likely have run out of memory on both cards. Fixed (stored only outside
+backward) and tested. Smaller fixes: a fused-kernel out-of-memory error no longer retries on
+the math kernel, `--only-mode` is refused for arms without per-mode weights, MoE top-k above
+the expert count is refused, and three small device and path fixes. Commit `4fdb4be` lists them.
 
 ## Measured versus estimated
 

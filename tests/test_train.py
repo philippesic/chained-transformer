@@ -49,6 +49,14 @@ def test_token_losses_do_not_depend_on_the_loss_chunk(
     assert torch.allclose(token_losses(tiny_model, batch, chunk), whole, atol=1e-6)
 
 
+@pytest.mark.parametrize("arm", ["sft", "moe"])
+def test_only_mode_is_refused_for_arms_without_mode_weights(tmp_path: Path, arm: str) -> None:
+    argv = ["--arm", arm, "--data", str(tmp_path), "--out", str(tmp_path / "run")]
+    with pytest.raises(SystemExit):
+        main([*argv, "--only-mode", "code", "--device", "cpu"])
+    assert not (tmp_path / "run").exists()
+
+
 @pytest.mark.parametrize("arm", ARMS)
 def test_each_arm_trains_on_cpu(tiny_model: Qwen3ForCausalLM, tmp_path: Path, arm: str) -> None:
     base = tmp_path / "base"

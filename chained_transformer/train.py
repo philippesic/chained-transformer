@@ -200,6 +200,8 @@ def main(
     args = parser.parse_args(argv)
     if (args.arm == "separate") != (args.mode is not None):
         parser.error("--mode is required for --arm separate and only valid there")
+    if args.only_mode is not None and args.arm not in ("full", "lora"):
+        parser.error("--only-mode needs --arm full or lora, the arms with per-mode weights")
 
     torch.manual_seed(args.seed)
     random.seed(args.seed)
@@ -235,7 +237,7 @@ def main(
     (args.out / "config.json").write_text(json.dumps(meta, indent=2) + "\n")
     log = (args.out / "train.jsonl").open("w")
     if on_gpu:
-        torch.cuda.reset_peak_memory_stats()
+        torch.cuda.reset_peak_memory_stats(device)
     step_times: list[float] = []
     tokens_per_step: list[int] = []
     cursor = 0

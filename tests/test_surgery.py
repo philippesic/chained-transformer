@@ -110,6 +110,26 @@ def test_moe_router_gets_gradient_and_aux_loss(tiny_model: Qwen3ForCausalLM) -> 
     assert all(g is not None and g.abs().sum() > 0 for g in routers)
 
 
+def test_checkpoint_recompute_keeps_the_forward_aux_loss(tiny_model: Qwen3ForCausalLM) -> None:
+    apply_surgery(tiny_model, SurgeryConfig(variant="moe", moe_experts=3, moe_top_k=2))
+    tiny_model.activation_checkpointing_enable({"use_reentrant": False})
+    tiny_model.train()
+    ids = _ids(8, (1, 8), 64)
+    loss = tiny_model(input_ids=ids, labels=ids).loss
+    moes = [m for m in tiny_model.modules() if isinstance(m, MoEMLP)]
+    before = [m.aux_loss for m in moes]
+    aux = moe_aux_loss(tiny_model)
+    assert aux is not None
+    (loss + 0.01 * aux).backward()
+    assert all(m.aux_loss is b for m, b in zip(moes, before, strict=True))
+    assert all(m.router.weight.grad is not None for m in moes)
+
+
+def test_moe_rejects_top_k_above_the_expert_count(tiny_model: Qwen3ForCausalLM) -> None:
+    with pytest.raises(ValueError, match="top_k"):
+        apply_surgery(tiny_model, SurgeryConfig(variant="moe", moe_experts=3, moe_top_k=4))
+
+
 class _Scale(torch.nn.Module):
     def __init__(self, weight: torch.Tensor) -> None:
         super().__init__()

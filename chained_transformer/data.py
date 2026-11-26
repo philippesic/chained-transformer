@@ -285,6 +285,7 @@ def sample_view(record: dict[str, Any], texts: TokenTexts) -> dict[str, Any]:
 
 def build(rows: int, num_shards: int, out: Path, tokenizer_name: str) -> dict[str, Any]:
     stats = SliceStats()
+    out.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=out.parent) as cache:
         ds = Dataset.from_generator(
             labelled_rows,

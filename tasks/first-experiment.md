@@ -69,7 +69,9 @@ Open decisions (proposals, not yet agreed):
    smoke's 16k memory probe; the alternative is truncating, which drops most answer tokens.
 3. **Prompt tokens' mode.** Currently `think` (`prompt_mode`). An alternative is `answer`.
 4. **`lora` arm trainables.** Currently: base MLP frozen, trunk and LoRA trainable.
-5. **`moe` top-k.** Currently 2 (as in BTX); top-1 would match `full`'s active compute.
+5. **`moe` top-k.** Currently 2 (as in BTX); top-1 would match `full`'s active compute. With
+   top-1 the renormalised weight is always exactly 1, so the router would learn only from the
+   balance loss; top-1 needs the router probability itself as the weight.
 6. **LiveCodeBench.** Needs a pinned `lcb_runner` commit; not wired yet.
 
 Missing before real runs: checkpoint save and load, row packing or a length policy, and an eval
