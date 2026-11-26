@@ -150,6 +150,56 @@ Checked on CPU with tiny `full` and `lora` pilot checkpoints: both, exported, an
 as saved, decode token for token and mode for mode like Hugging Face in the hand-driven engine,
 and a fresh process with only `register()` reads both the export and the saved `full` checkpoint.
 
+## GPU runtime review
+
+A line-by-line read of the plugin against vLLM 0.34.0's GPU model runner (`vllm/v1/worker/gpu/`),
+done on CPU on 2026-11-26. Nothing here ran on a GPU; it says which code paths were followed and
+what they imply.
+
+Checked and fine:
+
+- CUDA graph capture and replay. `create_forward_fn` in `cudagraph_utils.py` calls
+  `prepare_dummy_inputs` outside `torch.cuda.graph`, so the graph records reads from the
+  persistent `mode_ids` buffer, and FULL replay (`run_fullgraph`) relies on `prepare_inputs`
+  having refilled that same buffer. The plugin always writes `mode_ids[:padded]`, zeroes the
+  padding, and copies host to device with a blocking copy, so a replay never reads stale modes.
+- KV cache on a mode switch. A switch changes which MLP a token uses; attention and the KV cache
+  are shared, so a switch needs no cache operation. Prefix-cache block hashes depend only on
+  tokens, which is safe because a token's mode is a function of the tokens before it, given a
+  fixed tracker config (`prompt_mode`, token texts). Preemption with recompute goes through
+  `add_request` again and reseeds from `prefill_token_ids`.
+- Async scheduling (on by default on GPU). The plugin reads this step's `input_ids` from the
+  device after vLLM has written them, so the tracker always sees the sampled tokens in order.
+- The compile cache keeps `mlp_impl` values apart: vLLM hashes `hf_config` and `hf_text_config`,
+  which carry `mode_tracking.mlp_impl`. Checked by building two configs that differ only in
+  `mlp_impl` and comparing `compile_factors()`.
+- Stacked weights on CUDA. `UnquantizedLinearMethod.process_weights_after_loading` only sets a
+  skinny-GEMM flag on CUDA and leaves weights in place, so the stacked per-mode views survive.
+- The Triton grouped op under graphs: a static grid from `padded_length`, alignment with no host
+  sync, fp32 accumulation, and `num_tokens` not specialised.
+
+Found and fixed on `cloud/serving-review`:
+
+- Speculative decoding, micro-batching and pipeline parallelism routed tokens silently wrong.
+  Draft tokens reach the host tracker before they are accepted, and adaptive verification moves
+  `query_start_loc` on the device only; `slice_model_inputs` in `ubatch_utils.py` slices
+  `input_ids` and `positions` per micro-batch but not `mode_ids`; pipeline stages get sampled
+  tokens by a side broadcast the plugin never saw. `ModeModelState` now refuses all three at
+  engine start with `NotImplementedError` naming the feature.
+- `set_mlp_impl` on an engine that was compiled or captured graphs changed a flag and nothing
+  else, so a benchmark would have timed the old implementation under the new name. It now raises
+  unless the engine runs with `enforce_eager=True`.
+
+Still open, to check on the 2080 Ti:
+
+- fp16 on sm_75. Qwen3 activations may overflow in fp16. Run the base model in fp16 and fp32 and
+  compare them with `python -m tools.compare_outputs` before trusting any chained number.
+- One device-to-host copy per step (see Known limits).
+- With async scheduling and `ignore_eos=False`, a request that stops on EOS may get one extra
+  forward step, so its trace can hold one more entry than its output.
+- A KV connector that shares cache across engines keyed by tokens alone would be wrong if those
+  engines ran different tracker configs. No such connector is configured by this repo.
+
 ## Not verified
 
 - vLLM's own engine driving the plugin: its scheduler, GPU model runner and sampler calling
@@ -168,13 +218,16 @@ and a fresh process with only `register()` reads both the export and the saved `
   checkpoint has been served.
 - Every GPU number: `tools.bench_vllm` arms, `tools.bench_mode_mlp` on CUDA with its CUDA graph
   check, `tools.bench_paging` transfer rates and overlap, `tools.bench_serving --model qwen`.
-- Speculative decoding through vLLM. Rollback is covered by rebuild in the slot unit tests only.
 - That stacked weights cost no extra GPU memory. vLLM's CUDA path leaves linear weights in place
   after loading, so the per-mode views should survive, but no GPU run measured it.
 - llama.cpp: design sketch only ([llama-cpp.md](llama-cpp.md)), no code.
 
 ## Known limits
 
+- Speculative decoding, micro-batching (`--enable-dbo`) and pipeline parallelism are refused at
+  engine start; see the GPU runtime review.
+- `set_mlp_impl` works only on an engine started with `enforce_eager=True`; otherwise start a new
+  engine with the impl in `hf_overrides`.
 - `loop` is eager only: its data-dependent shapes fail under torch.compile. `tools.bench_vllm`
   forces `enforce_eager` for it.
 - `select` runs every mode's MLP on every token, so it costs `M` times the MLP compute; it is

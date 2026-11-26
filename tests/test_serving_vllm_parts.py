@@ -554,6 +554,62 @@ def test_runner_report_checks_stacked_weights(
         weight.data = saved
 
 
+def test_mode_state_lists_untested_vllm_features() -> None:
+    from types import SimpleNamespace
+
+    from serving.vllm_plugin.state import unsupported_features
+
+    def config(spec: Any = None, ubatch: bool = False, pp: int = 1) -> Any:
+        parallel = SimpleNamespace(use_ubatching=ubatch, pipeline_parallel_size=pp)
+        return SimpleNamespace(speculative_config=spec, parallel_config=parallel)
+
+    assert unsupported_features(config()) == []
+    found = unsupported_features(config(spec=object(), ubatch=True, pp=2))
+    assert [f.split(" ")[0] for f in found] == ["speculative", "micro-batching", "pipeline"]
+    assert "mode_ids" in found[1]
+
+
+def test_mode_state_refuses_speculative_decoding(
+    vllm_model: tuple[Any, Any, dict[str, torch.Tensor]],
+) -> None:
+    import copy
+    from types import SimpleNamespace
+
+    from serving.vllm_plugin.state import ModeModelState
+
+    config, model, _ = vllm_model
+    assert config.speculative_config is None
+    ModeModelState(config, model, None, torch.device("cpu"))
+    drafted = copy.copy(config)
+    object.__setattr__(drafted, "speculative_config", SimpleNamespace(num_speculative_tokens=2))
+    with pytest.raises(NotImplementedError, match="speculative decoding"):
+        ModeModelState(drafted, model, None, torch.device("cpu"))
+
+
+def test_set_mlp_impl_refuses_a_compiled_engine(
+    vllm_model: tuple[Any, Any, dict[str, torch.Tensor]],
+) -> None:
+    from types import SimpleNamespace
+
+    from serving.vllm_plugin.state import set_mlp_impl
+
+    config, model, _ = vllm_model
+    eager = SimpleNamespace(model_runner=SimpleNamespace(vllm_config=config, model=model))
+    assert set_mlp_impl(eager, "select") == 2
+    for mode, graphs in (("VLLM_COMPILE", "NONE"), ("NONE", "FULL")):
+        compilation = SimpleNamespace(
+            mode=SimpleNamespace(name=mode), cudagraph_mode=SimpleNamespace(name=graphs)
+        )
+        compiled = SimpleNamespace(
+            model_runner=SimpleNamespace(
+                vllm_config=SimpleNamespace(compilation_config=compilation), model=model
+            )
+        )
+        with pytest.raises(RuntimeError, match="change nothing"):
+            set_mlp_impl(compiled, "triton")
+    assert {m.impl for m in model.modules() if hasattr(m, "stack_weights")} == {"select"}
+
+
 @pytest.mark.parametrize("impl", IMPLS)
 def test_hand_driven_engine_matches_hf_greedy(
     vllm_model: tuple[Any, Any, dict[str, torch.Tensor]],

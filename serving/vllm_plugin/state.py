@@ -36,6 +36,28 @@ def token_texts(vllm_config: VllmConfig) -> list[str]:
     return TokenTexts.from_tokenizer(tokenizer).texts
 
 
+def unsupported_features(vllm_config: Any) -> list[str]:
+    found = []
+    if vllm_config.speculative_config is not None:
+        found.append(
+            "speculative decoding: draft tokens reach the host-side mode tracker before they "
+            "are accepted, and with async scheduling the host's token positions can run ahead "
+            "of the accepted ones"
+        )
+    parallel = vllm_config.parallel_config
+    if parallel.use_ubatching:
+        found.append(
+            "micro-batching (--enable-dbo or a ubatch size above 1): vLLM slices input_ids "
+            "and positions per micro-batch but not mode_ids"
+        )
+    if parallel.pipeline_parallel_size > 1:
+        found.append(
+            "pipeline parallelism: later stages receive sampled tokens by a side-stream "
+            "broadcast that this plugin was never tested against"
+        )
+    return found
+
+
 class ModeModelState(DefaultModelState):
     def __init__(
         self,
@@ -44,6 +66,12 @@ class ModeModelState(DefaultModelState):
         encoder_cache: Any,
         device: torch.device,
     ) -> None:
+        found = unsupported_features(vllm_config)
+        if found:
+            raise NotImplementedError(
+                "ChainedQwen3ForCausalLM routes tokens by mode on the host and does not "
+                "support " + "; ".join(found)
+            )
         super().__init__(vllm_config, model, encoder_cache, device)
         settings = tracking_settings(vllm_config.model_config.hf_config)
         self.num_modes = settings.num_modes
@@ -114,7 +142,15 @@ def _runner(worker: Any) -> Any:
 def set_mlp_impl(worker: Any, impl: str) -> int:
     from serving.vllm_plugin.model import VllmModeMLP
 
-    mlps = [m for m in _runner(worker).model.modules() if isinstance(m, VllmModeMLP)]
+    runner = _runner(worker)
+    compilation = runner.vllm_config.compilation_config
+    if _name(compilation.mode) != "NONE" or _name(compilation.cudagraph_mode) != "NONE":
+        raise RuntimeError(
+            "this engine was compiled or captured CUDA graphs with its mlp_impl built in, so "
+            "changing it now would change nothing; start a new engine with "
+            "hf_overrides={'mode_tracking': {'mlp_impl': ...}} or use enforce_eager=True"
+        )
+    mlps = [m for m in runner.model.modules() if isinstance(m, VllmModeMLP)]
     for mlp in mlps:
         mlp.impl = impl
     return len(mlps)
