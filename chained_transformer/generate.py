@@ -12,6 +12,8 @@ from transformers import DynamicCache, PreTrainedTokenizerBase
 from chained_transformer.modes import Mode, ModeTracker
 from chained_transformer.surgery import Routing
 
+PREFILL_CHUNK = 2048
+
 
 class TokenTexts:
     def __init__(self, texts: list[str]) -> None:
@@ -87,6 +89,7 @@ def generate_separate_models(
     max_new_tokens: int,
     eos_ids: set[int],
     prompt_mode: Mode = Mode.THINK,
+    prefill_chunk: int = PREFILL_CHUNK,
 ) -> SeparateModelsResult:
     device = next(models[0].parameters()).device
     tracker = ModeTracker(prompt_mode=prompt_mode)
@@ -104,8 +107,13 @@ def generate_separate_models(
         pending = tokens[seen[mode] :]
         if step > 0:
             reprefilled += len(pending) - 1
-        ids = torch.tensor([pending], dtype=torch.long, device=device)
-        logits = model(input_ids=ids, cache=caches[mode], use_cache=True).logits
+        for start in range(0, len(pending), prefill_chunk):
+            ids = torch.tensor(
+                [pending[start : start + prefill_chunk]], dtype=torch.long, device=device
+            )
+            logits = model(
+                input_ids=ids, cache=caches[mode], use_cache=True, logits_to_keep=1
+            ).logits
         seen[mode] = len(tokens)
         next_id = int(logits[0, -1].argmax())
         tokens.append(next_id)

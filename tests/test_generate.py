@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 
+import pytest
 import torch
 from transformers import GenerationConfig, Qwen3ForCausalLM
 
@@ -73,12 +74,15 @@ def test_batched_rows_track_modes_independently(tiny_model: Qwen3ForCausalLM) ->
     assert routing.mode_ids is None
 
 
+@pytest.mark.parametrize("chunk", [2048, 3])
 def test_separate_models_with_identical_weights_match_one_model(
-    tiny_model: Qwen3ForCausalLM,
+    tiny_model: Qwen3ForCausalLM, chunk: int
 ) -> None:
     bias_toward_switch_tokens(tiny_model)
     models = [copy.deepcopy(tiny_model) for _ in Mode]
-    res = generate_separate_models(models, tiny_texts(), PROMPT[0].tolist(), 30, eos_ids=set())
+    res = generate_separate_models(
+        models, tiny_texts(), PROMPT[0].tolist(), 30, eos_ids=set(), prefill_chunk=chunk
+    )
     with torch.no_grad():
         want = greedy(tiny_model, PROMPT, 30)[0, PROMPT.shape[1] :].tolist()
     assert res.token_ids == want

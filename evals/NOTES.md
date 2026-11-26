@@ -32,6 +32,16 @@ uv run --locked --no-sync python -m evals.run --model <checkpoint or Hub name> \
   tokens, batch 1, bf16 on CUDA and fp32 on CPU. `--greedy` for deterministic runs; the separate
   arm only decodes greedily.
 - `--separate THINK CODE ANSWER` runs the `separate` arm from three plain fine-tunes.
+- GPU memory: Qwen3-0.6B's KV cache is 112 KiB per token in bf16, so 16 sequences of 8,192 new
+  tokens need over 14 GiB, more than the 2080 Ti or the 5080 has left after the weights.
+  On CUDA, `evals.run` checks the batch against free memory before generating (KV cache plus
+  prefill attention, within 80% of what is free) and stops with the largest batch that fits.
+  `--batch-size auto` picks that batch itself, up to 16; each benchmark's `perf.batch_size`
+  records the batch used. It also sets the same allocator option as training
+  (`expandable_segments:True`) unless one is set already.
+- The `separate` arm re-prefills a model's missed tokens in chunks of 2,048 and keeps only the
+  last position's logits, so a switch after thousands of thinking tokens does not materialise
+  logits for every position.
 - `--limit N` marks the report as a smoke run. `--score-only` rescores saved responses.
   `--oracle` scores each benchmark's reference responses with no model, to check a scorer.
 - `--source math500=hf|github|<jsonl>`, `--source livecodebench=<dir of test*.jsonl>`; without a
@@ -85,6 +95,9 @@ uv run --locked --no-sync python -m evals.run --model <checkpoint or Hub name> \
   the dataset's loader script on the Hub, which could not be read. The report records the
   README's count for the release next to the count loaded; v5 should give 880.
 
+- The pilot evaluates each arm as soon as its training runs are done (`commands.sh` and `run`
+  use that order), so an eval problem shows up after the first arm, and uses `--batch-size auto`
+  by default.
 - The pilot (`tools/pilot.py`) evaluates every arm greedily, because the `separate` arm's
   re-prefill loop only decodes greedily; Qwen3's recommended sampling (0.6/0.95/20) is for later
   runs. Its defaults (1,000 steps, 4,096 tokens, 8 rows per step, learning rate 1e-5 and 1e-4
