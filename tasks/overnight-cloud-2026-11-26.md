@@ -12,8 +12,10 @@ Branch `cloud/harness` off `main` at 63f337b, built in a CPU-only cloud containe
    scripts for the 5080.
 2. **No torch in the container.** Installing the packages `pyproject.toml` lists needed
    Philip's yes, asked at 09:31 UTC, and none came before he slept. Nothing was installed. So
-   no torch code on this branch has run: the only tests run are the pure-Python mix tests
-   (`tests/test_mix.py`, 5 passed) and ruff (clean). Every torch test added here is unrun.
+   no torch code on this branch has run. What did run: the pure-Python mix tests
+   (`tests/test_mix.py`, 5 passed), the memory check's verdict tests (3 passed, run outside
+   pytest), ruff (clean) and mypy (clean, but with torch absent every torch type was `Any`).
+   Every torch test added here is unrun.
 
 What stood in for running code: reading the pinned dependencies' own source (torch 2.14.0,
 transformers 5.24.1, torchao 0.18.0, unpacked from PyPI wheels and read, never installed or
@@ -130,18 +132,30 @@ uv run --locked --no-sync python -m chained_transformer.data --policy equal-doma
   position mode and for segment label, balanced accuracy on held-out rows against a majority
   baseline. Unrun. `uv run --locked --no-sync python -m tools.mode_probe --data artifacts/data/ot3-mix`.
 - `docs/routing-and-looping.md`: how mode routing could combine with looped layers (Relaxed
-  Recursive Transformers, Mixture-of-Recursions, MoEUT checked tonight), the KV-cache question
-  it raises, and a first experiment with a kill rule.
+  Recursive Transformers, Mixture-of-Recursions, MoEUT, How to Loop Your Transformer and
+  Training-Free Looped Transformers, each checked against its paper tonight), the KV-cache
+  question it raises, and a first experiment with a kill rule. Its step 0 needs no training:
+  Training-Free Looped Transformers already loops Qwen3-0.6B's middle layers at inference.
+
+## 5. Re-read for run-time bugs
+
+A line-by-line pass over the new code for shapes, dtypes, device moves and chunk boundaries.
+One real bug: without `--budget-gib`, the memory check printed an arm that ran out of memory
+as a normal line and exited 0; it now always fails that arm and flags attention falling back to
+the math kernel. Tests added (unrun): the optimizer gives bit-identical params and state with an
+uneven last chunk (quantized, small and large-but-unquantizable tensors), per-token losses do
+not depend on the loss chunk, `make_batch` cuts long rows correctly, and the memory check's
+verdict. Checked and fine: the MoE router has no bias, so routing without it is correct.
 
 ## Measured versus estimated
 
-- Measured: nothing on torch. The mix logic (5 tests) and the bf16 combine (numpy emulation).
+- Measured: nothing on torch. The mix logic (5 tests), the memory check's verdict (3 tests)
+  and the bf16 combine (numpy emulation).
 - Read from source: torch 2.14 skips compiling bf16 below sm80; torchao 0.18's uncompiled step
   allocations; transformers 5.24.1's attention interface.
 - Estimated: every memory number above.
 
 ## Order on the GPU
 
-1. `python -m tools.check` on either machine: the new torch tests run for the first time.
-2. The memory check on the 2080 Ti (command above).
-3. `python -m tools.gpu_smoke` on the 5080 when it is free, then the data build and probes.
+[runbook-cloud-harness](runbook-cloud-harness.md) has every command in order, for both
+machines, with what a pass looks like.
