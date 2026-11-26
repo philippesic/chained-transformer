@@ -35,6 +35,7 @@ def args(**changes: Any) -> argparse.Namespace:
         "num_prompts": 8,
         "max_tokens": 16,
         "gpu_mem": 0.5,
+        "max_model_len": 1024,
         "only": [],
         "skip": [],
     }
@@ -134,23 +135,31 @@ def test_run_step_logs_and_reports(tmp_path: Path) -> None:
         "ok",
         [[sys.executable, "-c", write]],
         checklist.json_judge(out, checklist.serving_outcome),
-        "hint",
+        "what broke",
+        "the fix",
     )
     row = checklist.run_step(ok, tmp_path, timeout=60)
     assert row["status"] == "pass"
-    assert "hint" not in row
+    assert "broke" not in row and "fix" not in row
     bad = checklist.Step(
         "bad",
-        [[sys.executable, "-c", "print('boom'); raise SystemExit(3)"]],
+        [[sys.executable, "-c", "print('boom: CUDA out of memory'); raise SystemExit(3)"]],
         checklist.exit_judge,
-        "why",
+        "the bad step broke",
+        "do the fix",
     )
     row = checklist.run_step(bad, tmp_path, timeout=60)
     assert row["status"] == "fail"
     assert row["notes"] == ["exit 3"]
-    assert row["hint"] == "why"
+    assert row["broke"] == "the bad step broke"
+    assert row["fix"] == "do the fix"
     assert "boom" in row["log_tail"]
-    skipped = checklist.Step("later", [], checklist.exit_judge, "", needs="no vLLM")
+    assert any("ran out of memory" in why for why in row["likely"])
+    line = checklist.summary_line(row)
+    assert line.startswith("FAIL bad (")
+    assert "broke: the bad step broke" in line and "fix: do the fix" in line
+    assert "likely: the GPU ran out of memory" in line
+    skipped = checklist.Step("later", [], checklist.exit_judge, "", "", needs="no vLLM")
     assert checklist.run_step(skipped, tmp_path, timeout=60)["status"] == "not run"
     rows = [row, {"name": "later", "status": "not run", "notes": ["no vLLM"], "seconds": 0}]
     report = {
@@ -163,7 +172,8 @@ def test_run_step_logs_and_reports(tmp_path: Path) -> None:
     assert report["verdict"] == "FAILED"
     text = checklist.markdown(report)
     assert "- **bad:** fail" in text
-    assert "what it means: why" in text
+    assert "what broke: the bad step broke" in text
+    assert "fix: do the fix" in text
     json.dumps(report)
 
 
@@ -171,3 +181,110 @@ def test_verdicts() -> None:
     assert checklist.verdict([{"status": "pass"}]) == "PASSED"
     assert checklist.verdict([{"status": "pass"}, {"status": "warn"}]) == "PASSED with warnings"
     assert checklist.verdict([{"status": "pass"}, {"status": "not run"}]) == "INCOMPLETE"
+
+
+QWEN3_0_6B = {
+    "hidden_size": 1024,
+    "intermediate_size": 3072,
+    "num_hidden_layers": 28,
+    "num_attention_heads": 16,
+    "num_key_value_heads": 8,
+    "head_dim": 128,
+    "vocab_size": 151936,
+    "tie_word_embeddings": True,
+}
+RTX_2080_TI_GIB = 10.75
+
+
+def test_kernel_outcome_skips_block_sizes_too_big_for_the_gpu() -> None:
+    report = kernel_report()
+    too_big = "OutOfResources('out of resource: shared memory, Required: 73728')"
+    report["rows"].append(
+        {"tokens": 64, "mix": "three", "impl": "triton_64x128x32", "error": too_big}
+    )
+    out = checklist.kernel_outcome(report)
+    assert out.status == "pass"
+    assert "info: triton_64x128x32 needs more shared memory than this GPU has; not timed" in (
+        out.notes
+    )
+    report["rows"] = [r for r in report["rows"] if r["impl"] != "triton_16x64x64"]
+    assert checklist.kernel_outcome(report).status == "fail"
+
+
+def test_model_sizes_match_qwen3_0_6b() -> None:
+    sizes = checklist.model_sizes(QWEN3_0_6B)
+    assert sizes["base_gib"] == pytest.approx(1.11, abs=0.01)
+    assert sizes["chained_gib"] == pytest.approx(2.09, abs=0.01)
+    assert sizes["kv_gib_per_1k_tokens"] == pytest.approx(0.109, abs=0.001)
+
+
+def test_memory_plan_fits_the_2080_ti_with_the_defaults() -> None:
+    sizes = checklist.model_sizes(QWEN3_0_6B)
+    problems, warnings, plan = checklist.memory_plan(RTX_2080_TI_GIB, 10.4, 0.8, 1024, sizes)
+    assert problems == [] and warnings == []
+    assert plan["each separate model"]["budget_gib"] == pytest.approx(2.87, abs=0.01)
+    busy, _, _ = checklist.memory_plan(RTX_2080_TI_GIB, 4.0, 0.8, 1024, sizes)
+    assert len(busy) == 1 and "only 4.0 GiB is free" in busy[0] and "--gpu-mem 0.34" in busy[0]
+    _, tight, _ = checklist.memory_plan(RTX_2080_TI_GIB, 10.4, 0.6, 4096, sizes)
+    assert any("each separate model" in w for w in tight)
+    small, _, _ = checklist.memory_plan(RTX_2080_TI_GIB, 10.4, 0.3, 1024, sizes)
+    assert any("each separate model engine gets 1.1 GiB" in p for p in small)
+    assert checklist.memory_plan(RTX_2080_TI_GIB, 10.4, 0.8, 1024, None)[0] == []
+
+
+def test_gpu_problems_know_turing() -> None:
+    turing = {"gpu": "RTX 2080 Ti", "capability": [7, 5], "arch_list": ["sm_75", "sm_80"]}
+    problems, notes = checklist.gpu_problems(turing)
+    assert problems == []
+    assert len(notes) == 1 and "sm_75 has no bfloat16" in notes[0] and "5080 only" in notes[0]
+    blackwell = {"gpu": "RTX 5080", "capability": [12, 0], "arch_list": ["sm_75", "sm_120"]}
+    assert checklist.gpu_problems(blackwell) == ([], [])
+    pascal, _ = checklist.gpu_problems({"gpu": "GTX 1080", "capability": [6, 1]})
+    assert pascal and "need sm_75 or newer" in pascal[0]
+    _, missing = checklist.gpu_problems({**turing, "arch_list": ["sm_80", "sm_90"]})
+    assert any("not sm_75" in n for n in missing)
+    assert checklist.runs_on("compute_70", (7, 5))
+    assert checklist.runs_on("sm_80", (8, 6))
+    assert not checklist.runs_on("sm_86", (8, 0))
+
+
+def test_diagnose_names_likely_causes() -> None:
+    text = "ValueError: Bfloat16 is only supported on GPUs with compute capability of at least 8.0"
+    assert any("5080 only" in why for why in checklist.diagnose(text))
+    assert any("--gpu-mem" in why for why in checklist.diagnose("Free memory on device (4.1/10.7"))
+    assert checklist.diagnose("all good") == []
+
+
+def test_summary_lines_and_results_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    rows = [
+        {"name": "check", "status": "pass", "notes": [], "seconds": 3.0},
+        {"name": "hf-bench", "status": "warn", "notes": ["batched differs"], "seconds": 9.0},
+        {"name": "vllm-bench", "status": "not run", "notes": ["no vLLM"], "seconds": 0},
+    ]
+    lines = [checklist.summary_line(r) for r in rows]
+    assert lines == [
+        "PASS check (3.0 s)",
+        "PASS hf-bench (9.0 s) with warnings: batched differs",
+        "SKIP vllm-bench (0 s): no vLLM",
+    ]
+    monkeypatch.setattr(checklist, "RUNS", tmp_path / "runs")
+    info = {"repo_env": {"gpu": "RTX 2080 Ti", "capability": [7, 5], "torch": "2.14"}}
+    path = checklist.write_results(checklist.results_text("PASSED", info, lines), "stamp")
+    assert path == tmp_path / "runs" / "serving-gpu-checklist-stamp.txt"
+    text = path.read_text().splitlines()
+    assert text[0] == "serving GPU checklist: PASSED"
+    assert text[1].startswith("device: RTX 2080 Ti (sm_75)")
+    assert text[-3:] == lines
+
+
+def test_main_writes_a_results_file_when_preflight_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(checklist, "RUNS", tmp_path / "runs")
+    monkeypatch.setattr(checklist.shutil, "which", lambda name: None)
+    monkeypatch.setattr(sys, "argv", ["checklist", "--out", str(tmp_path / "out")])
+    assert checklist.main() == 2
+    [path] = (tmp_path / "runs").iterdir()
+    text = path.read_text()
+    assert text.startswith("serving GPU checklist: NOT STARTED")
+    assert "FAIL preflight: nvidia-smi is not on PATH" in text

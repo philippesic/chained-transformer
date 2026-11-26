@@ -56,7 +56,7 @@ def main() -> int:
     clients = other_gpu_clients()
     if clients and not args.allow_other_clients:
         print("GPU busy; not starting. Other compute clients:", *clients, sep="\n  ")
-        print("Wait for them to finish, or queue this behind them in pueue's gpu group.")
+        print("Wait for them to finish; this project queues in pueue's ct group, never gpu.")
         return 2
     out = args.out or Path("artifacts/smoke") / datetime.now().strftime("%Y%m%d-%H%M%S")
     out.mkdir(parents=True, exist_ok=True)

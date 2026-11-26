@@ -28,8 +28,11 @@ The check lane uses a tiny random Qwen3 and the cached Qwen3-0.6B tokenizer, so 
 tokenizer downloaded once. CPU results are not GPU or performance evidence.
 
 `tools.gpu_smoke` refuses to start while another process holds the GPU and lists the
-processes. The RTX 5080 is shared with BitDraft: check `nvidia-smi` and `pueue status` before
-GPU work, never stop another project's job, and queue behind it in pueue's `gpu` group instead.
+processes. The RTX 5080 is reserved for BitDraft and is not used until Philip says so. On the
+RTX 2080 Ti this project queues in pueue's `ct` group (parallelism 1), as in
+`pueue add -g ct -- uv run --locked --no-sync python -m tools.serving_gpu_checklist`; the `gpu`
+group there belongs to ShaderLOD and is never used. Check `nvidia-smi` and `pueue status` before
+GPU work and never stop another project's job.
 Outputs go to `artifacts/smoke/<timestamp>/` (`smoke.json` plus one log per step).
 
 ## Two machines
