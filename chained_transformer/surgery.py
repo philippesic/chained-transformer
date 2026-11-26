@@ -137,6 +137,8 @@ class LoRAModeMLP(nn.Module):
 class MoEMLP(nn.Module):
     def __init__(self, base: Qwen3MLP, num_experts: int, top_k: int, router_std: float) -> None:
         super().__init__()
+        if not 1 <= top_k <= num_experts:
+            raise ValueError(f"top_k must be between 1 and {num_experts}, got {top_k}")
         weight = next(base.parameters())
         self.experts = nn.ModuleList(copy.deepcopy(base) for _ in range(num_experts))
         self.router = nn.Linear(
@@ -158,7 +160,9 @@ class MoEMLP(nn.Module):
         probs, weights, chosen = self.route(flat)
         num_experts = len(self.experts)
         load = F.one_hot(chosen, num_experts).float().sum(dim=1).mean(dim=0) / self.top_k
-        self.aux_loss = num_experts * (load * probs.mean(dim=0)).sum()
+        aux_loss = num_experts * (load * probs.mean(dim=0)).sum()
+        if torch._C._current_graph_task_id() == -1:
+            self.aux_loss = aux_loss
         out = torch.zeros(flat.shape, dtype=torch.float32, device=flat.device)
         for e, expert in enumerate(self.experts):
             token_idx, slot = (chosen == e).nonzero(as_tuple=True)
