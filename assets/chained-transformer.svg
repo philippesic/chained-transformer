@@ -1,16 +1,27 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
   <title id="title">chained-transformer</title>
-  <desc id="desc">Three dots joined in a chain on a violet-to-teal gradient tile.</desc>
+  <desc id="desc">Two stacked isometric layer slabs on a navy tile, with a chain of dots rising from the top slab to a warm dot.</desc>
   <defs>
-    <linearGradient id="tile" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#7c5cff"/>
-      <stop offset="0.55" stop-color="#c0569f"/>
-      <stop offset="1" stop-color="#f59e0b"/>
+    <linearGradient id="tile" x1="32" y1="0" x2="32" y2="64" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1d2c47"/>
+      <stop offset="1" stop-color="#0e1524"/>
+    </linearGradient>
+    <linearGradient id="top" x1="9" y1="22" x2="47" y2="42" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#aef3e0"/>
+      <stop offset="1" stop-color="#6fcdb9"/>
     </linearGradient>
   </defs>
-  <rect width="64" height="64" rx="16" fill="url(#tile)"/>
-  <path d="M 15 45 L 32 32 L 49 19" fill="none" stroke="#ffffff" stroke-opacity="0.55" stroke-width="5" stroke-linecap="round"/>
-  <circle cx="15" cy="45" r="7.5" fill="#ffffff"/>
-  <circle cx="32" cy="32" r="7.5" fill="#ffffff"/>
-  <circle cx="49" cy="19" r="7.5" fill="#ffffff"/>
+  <rect width="64" height="64" rx="15" fill="url(#tile)"/>
+  <g opacity="0.9">
+    <path d="M 9 41 L 28 51.5 L 28 56.5 L 9 46 Z" fill="#26506a"/>
+    <path d="M 28 51.5 L 47 41 L 47 46 L 28 56.5 Z" fill="#1d4058"/>
+    <path d="M 9 41 L 28 30.5 L 47 41 L 28 51.5 Z" fill="#2f6280"/>
+  </g>
+  <path d="M 9 31 L 28 41.5 L 28 47.5 L 9 37 Z" fill="#4aa39c"/>
+  <path d="M 28 41.5 L 47 31 L 47 37 L 28 47.5 Z" fill="#37817f"/>
+  <path d="M 9 31 L 28 20.5 L 47 31 L 28 41.5 Z" fill="url(#top)"/>
+  <path d="M 28 31 L 39.5 20.5 L 50 12" fill="none" stroke="#e8edf5" stroke-opacity="0.5" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="28" cy="31" r="3.3" fill="#ffffff"/>
+  <circle cx="39.5" cy="20.5" r="3.3" fill="#ffffff"/>
+  <circle cx="50" cy="12" r="6.5" fill="#f6cf6b"/>
 </svg>
