@@ -55,7 +55,7 @@ def collect(
         if not keep:
             continue
         pos = torch.cat(keep)
-        out = model(input_ids=ids, output_hidden_states=True, use_cache=False)
+        out = model.model(input_ids=ids, output_hidden_states=True, use_cache=False)
         for layer in layers:
             feats[layer].append(out.hidden_states[layer][0, pos.to(device)].float().cpu())
         labels.append(torch.stack([position[pos], segment[pos]], dim=1))
