@@ -196,7 +196,9 @@ def test_eval_moe_mix_matches_the_sparse_training_mix(
     assert isinstance(moe, MoEMLP)
     with torch.no_grad():
         for i, expert in enumerate(moe.experts):
-            expert.down_proj.weight.mul_(1.0 + 0.5 * i)
+            down = expert.down_proj
+            assert isinstance(down, torch.nn.Linear)
+            down.weight.mul_(1.0 + 0.5 * i)
         moe.router.weight.normal_(0, 1.0)
     x = torch.randn(2, 7, 32, generator=torch.Generator().manual_seed(5))
     with torch.no_grad():
