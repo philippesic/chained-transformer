@@ -1,0 +1,49 @@
+{
+  "dataset": "open-thoughts/OpenThoughts3-1.2M",
+  "tokenizer": "Qwen/Qwen3-0.6B",
+  "requested_rows": 4000,
+  "shards": [
+    "datasets/open-thoughts/OpenThoughts3-1.2M/data/train-00000-of-00120.parquet",
+    "datasets/open-thoughts/OpenThoughts3-1.2M/data/train-00007-of-00120.parquet",
+    "datasets/open-thoughts/OpenThoughts3-1.2M/data/train-00014-of-00120.parquet",
+    "datasets/open-thoughts/OpenThoughts3-1.2M/data/train-00021-of-00120.parquet",
+    "datasets/open-thoughts/OpenThoughts3-1.2M/data/train-00028-of-00120.parquet",
+    "datasets/open-thoughts/OpenThoughts3-1.2M/data/train-00035-of-00120.parquet",
+    "datasets/open-thoughts/OpenThoughts3-1.2M/data/train-00042-of-00120.parquet",
+    "datasets/open-thoughts/OpenThoughts3-1.2M/data/train-00049-of-00120.parquet",
+    "datasets/open-thoughts/OpenThoughts3-1.2M/data/train-00056-of-00120.parquet",
+    "datasets/open-thoughts/OpenThoughts3-1.2M/data/train-00063-of-00120.parquet",
+    "datasets/open-thoughts/OpenThoughts3-1.2M/data/train-00070-of-00120.parquet",
+    "datasets/open-thoughts/OpenThoughts3-1.2M/data/train-00077-of-00120.parquet",
+    "datasets/open-thoughts/OpenThoughts3-1.2M/data/train-00084-of-00120.parquet",
+    "datasets/open-thoughts/OpenThoughts3-1.2M/data/train-00091-of-00120.parquet",
+    "datasets/open-thoughts/OpenThoughts3-1.2M/data/train-00098-of-00120.parquet",
+    "datasets/open-thoughts/OpenThoughts3-1.2M/data/train-00105-of-00120.parquet"
+  ],
+  "rows": 4000,
+  "skipped_not_single_turn": 0,
+  "missing_think_close": 2643,
+  "complete_rule": "has </think> and fewer than 16000 assistant tokens",
+  "complete_rows": 1102,
+  "domains": {
+    "code": 1000,
+    "math": 3000
+  },
+  "complete_by_domain": {
+    "code": 307,
+    "math": 795
+  },
+  "loss_tokens_by_label": {
+    "think": 60907477,
+    "answer": 631686,
+    "code": 173374
+  },
+  "complete_loss_tokens_by_label": {
+    "think": 13158754,
+    "answer": 517514,
+    "code": 131235
+  },
+  "tokens_total": 62696771,
+  "tokens_median": 16801,
+  "tokens_max": 16821
+}
