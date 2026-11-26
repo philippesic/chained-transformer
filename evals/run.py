@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import platform
 import statistics
@@ -13,6 +14,7 @@ from typing import Any
 
 import torch
 
+from chained_transformer.attention import ATTENTION_CHOICES
 from chained_transformer.modes import MODE_NAMES
 from chained_transformer.train import configure_allocator
 from evals import humanevalplus, livecodebench, math500
@@ -28,6 +30,8 @@ BENCHMARKS: dict[str, Benchmark] = {
 }
 DTYPES = {"float32": torch.float32, "bfloat16": torch.bfloat16}
 REPORT_VERSION = 1
+SAMPLE_SALT = "chained-transformer-eval-sample-v1"
+RESUME_IGNORES = ("batch_size", "refill")
 
 
 def git_state() -> dict[str, Any]:
@@ -60,6 +64,54 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 def write_jsonl(path: Path, rows: Sequence[dict[str, Any]]) -> None:
     path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+
+def read_complete_jsonl(path: Path) -> list[dict[str, Any]]:
+    rows = []
+    for line in path.read_text().splitlines():
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
+def sample_key(name: str, task_id: str) -> str:
+    return hashlib.sha256(f"{SAMPLE_SALT}:{name}:{task_id}".encode()).hexdigest()
+
+
+def sample_problems(name: str, problems: Sequence[Problem], n: int) -> list[Problem]:
+    ranked = sorted(problems, key=lambda p: sample_key(name, p.task_id))
+    keep = {p.task_id for p in ranked[:n]}
+    return [p for p in problems if p.task_id in keep]
+
+
+def parse_sample(items: Sequence[str], names: Sequence[str]) -> dict[str, int]:
+    sizes: dict[str, int] = {}
+    for item in items:
+        name, sep, value = item.rpartition("=")
+        if sep and name not in BENCHMARKS:
+            raise SystemExit(
+                f"--sample takes N or benchmark=N with a benchmark in {list(BENCHMARKS)}"
+            )
+        n = int(value)
+        if n < 1:
+            raise SystemExit("--sample sizes must be at least 1")
+        for target in [name] if sep else names:
+            sizes[target] = n
+    return sizes
+
+
+def resume_mismatch(previous: dict[str, Any], model: Any, generation: dict[str, Any]) -> list[str]:
+    def comparable(settings: dict[str, Any] | None) -> dict[str, Any]:
+        return {k: v for k, v in (settings or {}).items() if k not in RESUME_IGNORES}
+
+    problems = []
+    if previous.get("model") != model:
+        problems.append("model")
+    if comparable(previous.get("generation")) != comparable(generation):
+        problems.append("generation settings")
+    return problems
 
 
 def _mean(values: Sequence[float]) -> float | None:
@@ -123,6 +175,7 @@ def run_benchmark(
     workers: int,
     score_only: bool,
     oracle: bool,
+    resume: bool = False,
 ) -> dict[str, Any]:
     bench = BENCHMARKS[name]
     out.mkdir(parents=True, exist_ok=True)
@@ -141,14 +194,24 @@ def run_benchmark(
         write_jsonl(responses_path, [asdict(g) for g in generations])
     else:
         assert runner is not None
-        sink = responses_path.open("w")
+        kept: list[Generation] = []
+        if resume and responses_path.exists():
+            rows = read_complete_jsonl(responses_path)
+            write_jsonl(responses_path, rows)
+            kept = [generation_from_row(r) for r in rows]
+        have = {g.task_id for g in kept}
+        todo = [p for p in loaded.problems if p.task_id not in have]
+        sink = responses_path.open("a" if kept else "w")
 
         def save(g: Generation) -> None:
             sink.write(json.dumps(asdict(g)) + "\n")
             sink.flush()
 
-        generations, perf = generate_all(runner, loaded.problems, settings, save)
+        fresh, perf = generate_all(runner, todo, settings, save)
         sink.close()
+        wanted = {p.task_id for p in loaded.problems}
+        generations = [g for g in kept if g.task_id in wanted] + fresh
+        perf["resumed"] = len(generations) - len(fresh)
     texts = {g.task_id: g.text for g in generations}
     problems: list[Problem] = [p for p in loaded.problems if p.task_id in texts]
     start = time.perf_counter()
@@ -212,6 +275,22 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--benchmarks", nargs="+", choices=list(BENCHMARKS), required=True)
     parser.add_argument("--limit", type=int, help="first N problems of each benchmark (smoke)")
+    parser.add_argument(
+        "--sample",
+        nargs="+",
+        default=[],
+        help="N or benchmark=N: a fixed pseudo-random subset, the same for every model",
+    )
+    parser.add_argument(
+        "--resume", action="store_true", help="keep OUT's responses and generate only the rest"
+    )
+    parser.add_argument("--no-refill", action="store_true", help="plain static batches")
+    parser.add_argument(
+        "--attention",
+        choices=ATTENTION_CHOICES,
+        default="auto",
+        help="auto: fused kernels, in fp32 for bf16 on GPUs older than sm80",
+    )
     parser.add_argument("--source", nargs="*", default=[], help="benchmark=source, e.g. math500=hf")
     parser.add_argument("--tokenizer")
     parser.add_argument("--max-new-tokens", type=int, default=32768)
@@ -245,20 +324,31 @@ def main(argv: list[str] | None = None) -> None:
         batch_size=args.batch_size,
         seed=args.seed,
         enable_thinking=not args.no_thinking,
+        refill=not args.no_refill,
     )
     sources = parse_sources(args.source)
+    sample = parse_sample(args.sample, args.benchmarks)
     runner = None
     if args.model or args.separate:
-        runner = load_runner(args.model, args.separate, args.tokenizer, dtype, args.device)
+        runner = load_runner(
+            args.model, args.separate, args.tokenizer, dtype, args.device, args.attention
+        )
     args.out.mkdir(parents=True, exist_ok=True)
     report_path = args.out / "report.json"
-    previous = (
-        json.loads(report_path.read_text()) if args.score_only and report_path.exists() else {}
-    )
+    keep_previous = args.score_only or args.resume
+    previous = json.loads(report_path.read_text()) if keep_previous and report_path.exists() else {}
+    if args.resume and previous and runner is not None:
+        differs = resume_mismatch(previous, runner.spec, asdict(settings))
+        if differs:
+            raise SystemExit(
+                f"--resume: {args.out} holds responses from a different {' and '.join(differs)}; "
+                "use a new --out"
+            )
     report: dict[str, Any] = {
         "report_version": REPORT_VERSION,
         "kind": "oracle" if args.oracle else "model",
         "smoke": args.limit is not None,
+        "sample": {"sizes": sample, "salt": SAMPLE_SALT} if sample else None,
         "model": runner.spec if runner else previous.get("model"),
         "generation": asdict(settings)
         if not (args.oracle or args.score_only)
@@ -270,7 +360,10 @@ def main(argv: list[str] | None = None) -> None:
     }
     for name in args.benchmarks:
         loaded = BENCHMARKS[name].load(args.limit, sources.get(name))
-        report["benchmarks"][name] = run_benchmark(
+        available = len(loaded.problems)
+        if name in sample:
+            loaded = Loaded(sample_problems(name, loaded.problems, sample[name]), loaded.source)
+        result = run_benchmark(
             name,
             loaded,
             runner,
@@ -279,7 +372,10 @@ def main(argv: list[str] | None = None) -> None:
             args.workers,
             args.score_only,
             args.oracle,
+            args.resume,
         )
+        result["n_available"] = available
+        report["benchmarks"][name] = result
         report_path.write_text(json.dumps(report, indent=2) + "\n")
         print(name, json.dumps(report["benchmarks"][name]["scores"]), flush=True)
     report["finished"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
