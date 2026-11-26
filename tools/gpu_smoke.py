@@ -2,12 +2,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 
 PYTHON = [sys.executable, "-m"]
+MIN_JOB_MIB = 64
+
+
+def gpu_jobs(lines: list[str], min_mib: int = MIN_JOB_MIB) -> list[str]:
+    jobs = []
+    for line in lines:
+        used = re.fullmatch(r"(\d+)\s*MiB", line.rsplit(",", 1)[-1].strip())
+        if used is None or int(used.group(1)) >= min_mib:
+            jobs.append(line)
+    return jobs
 
 
 def other_gpu_clients() -> list[str]:
@@ -21,7 +32,7 @@ def other_gpu_clients() -> list[str]:
         text=True,
         check=True,
     ).stdout
-    return [line.strip() for line in out.splitlines() if line.strip()]
+    return gpu_jobs([line.strip() for line in out.splitlines() if line.strip()])
 
 
 def run(name: str, cmd: list[str], log_dir: Path) -> bool:

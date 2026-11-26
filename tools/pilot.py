@@ -384,6 +384,8 @@ def cmd_eval_one(args: argparse.Namespace) -> None:
 
 
 def other_gpu_processes() -> list[str] | None:
+    from tools.gpu_smoke import gpu_jobs
+
     query = ["nvidia-smi", "--query-compute-apps=pid,process_name,used_memory"]
     try:
         out = subprocess.run([*query, "--format=csv,noheader"], capture_output=True, text=True)
@@ -391,7 +393,7 @@ def other_gpu_processes() -> list[str] | None:
         return None
     if out.returncode != 0:
         return None
-    return [line.strip() for line in out.stdout.splitlines() if line.strip()]
+    return gpu_jobs([line.strip() for line in out.stdout.splitlines() if line.strip()])
 
 
 def ordered_steps(trains: list[TrainRun], evals: list[EvalRun]) -> list[tuple[str, str]]:
