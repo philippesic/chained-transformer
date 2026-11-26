@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import torch
 from datasets import Dataset
-from transformers import Qwen3Config, Qwen3ForCausalLM
+from transformers import GenerationConfig, Qwen3Config, Qwen3ForCausalLM
 
 from chained_transformer.attention import FALLBACKS, use_attention
 from chained_transformer.model import ARMS
@@ -126,6 +126,39 @@ def test_moe_backward_with_checkpointing_frees_recomputed_activations() -> None:
     grads = [p.grad for p in model.parameters() if p.grad is not None]
     grad_bytes = sum(g.numel() * g.element_size() for g in grads)
     assert torch.cuda.memory_allocated() - before < grad_bytes + 4 * MiB
+
+
+def test_moe_matches_base_over_a_long_batched_greedy_run_in_bf16() -> None:
+    base = _model(device=CUDA).bfloat16()
+    moe = copy.deepcopy(base)
+    apply_surgery(moe, SurgeryConfig(variant="moe", moe_experts=3, moe_top_k=2))
+    lengths = (40, 7, 23)
+    width = max(lengths)
+    ids = torch.zeros(len(lengths), width, dtype=torch.long)
+    mask = torch.zeros_like(ids)
+    for row, n in enumerate(lengths):
+        ids[row, width - n :] = _ids(n, 10 + row)[0]
+        mask[row, width - n :] = 1
+    cfg = GenerationConfig(
+        max_new_tokens=1024,
+        do_sample=False,
+        eos_token_id=None,
+        pad_token_id=0,
+        output_logits=True,
+        return_dict_in_generate=True,
+    )
+    inputs = {"input_ids": ids.to(CUDA), "attention_mask": mask.to(CUDA)}
+    with torch.no_grad():
+        want = base.generate(**inputs, generation_config=cfg)
+        got = moe.generate(**inputs, generation_config=cfg)
+    assert want.sequences.shape == (len(lengths), width + 1024)
+    differ = [
+        i
+        for i, (a, b) in enumerate(zip(got.logits, want.logits, strict=True))
+        if not torch.equal(a, b)
+    ]
+    assert not differ, f"logits first differ at new token {differ[0]}"
+    assert torch.equal(got.sequences, want.sequences)
 
 
 @pytest.mark.parametrize("arm", ARMS)

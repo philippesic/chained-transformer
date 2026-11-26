@@ -147,6 +147,7 @@ class MoEMLP(nn.Module):
         nn.init.normal_(self.router.weight, std=router_std)
         self.top_k = top_k
         self.aux_loss: torch.Tensor | None = None
+        self.train(base.training)
 
     def route(self, flat: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         logits = F.linear(flat.float(), self.router.weight.float())
@@ -163,6 +164,8 @@ class MoEMLP(nn.Module):
         aux_loss = num_experts * (load * probs.mean(dim=0)).sum()
         if torch._C._current_graph_task_id() == -1:
             self.aux_loss = aux_loss
+        if not self.training:
+            return self.mix(x, weights, chosen)
         out = torch.zeros(flat.shape, dtype=torch.float32, device=flat.device)
         for e, expert in enumerate(self.experts):
             token_idx, slot = (chosen == e).nonzero(as_tuple=True)
@@ -171,6 +174,20 @@ class MoEMLP(nn.Module):
             y = expert(flat.index_select(0, token_idx)).float() * weights[token_idx, slot, None]
             out = out.index_add(0, token_idx, y)
         return out.to(flat.dtype).reshape(shape)
+
+    def mix(self, x: torch.Tensor, weights: torch.Tensor, chosen: torch.Tensor) -> torch.Tensor:
+        width = x.shape[-1]
+        used = set(chosen.unique().tolist())
+        outs = x.new_zeros(len(self.experts), chosen.shape[0], width)
+        for e, expert in enumerate(self.experts):
+            if e in used:
+                outs[e] = expert(x).reshape(-1, width)
+        rows = torch.arange(chosen.shape[0], device=x.device)
+        first = outs[chosen[:, 0], rows].float()
+        out = first
+        for k in range(1, self.top_k):
+            out = out + weights[:, k, None] * (outs[chosen[:, k], rows].float() - first)
+        return out.to(x.dtype).reshape(x.shape)
 
 
 def decoder_layers(model: PreTrainedModel) -> nn.ModuleList:

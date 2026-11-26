@@ -47,10 +47,7 @@ def test_conversion_reproduces_base_logits(tiny_model: Qwen3ForCausalLM, variant
         for mode in range(len(MODE_NAMES)):
             model.routing.set(torch.full((2, 12), mode))
             got = model(input_ids=ids).logits
-            if variant == "moe":
-                torch.testing.assert_close(got, want, rtol=1e-5, atol=1e-5)
-            else:
-                assert torch.equal(got, want)
+            assert torch.equal(got, want)
         model.routing.set(_ids(2, (2, 12), 3))
         torch.testing.assert_close(model(input_ids=ids).logits, want, rtol=1e-5, atol=1e-5)
 

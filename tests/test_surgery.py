@@ -139,8 +139,9 @@ class _Scale(torch.nn.Module):
         return x * self.weight
 
 
+@pytest.mark.parametrize("training", [False, True])
 def test_moe_identical_experts_return_the_expert_output_in_bf16(
-    tiny_model: Qwen3ForCausalLM,
+    tiny_model: Qwen3ForCausalLM, training: bool
 ) -> None:
     apply_surgery(tiny_model, SurgeryConfig(variant="moe", moe_experts=3, moe_top_k=2))
     moe = tiny_model.model.layers[0].mlp
@@ -149,10 +150,59 @@ def test_moe_identical_experts_return_the_expert_output_in_bf16(
     scale = torch.randn(32, generator=g).bfloat16()
     moe.experts = torch.nn.ModuleList(_Scale(scale.clone()) for _ in range(3))
     moe.router.to(torch.bfloat16)
+    moe.train(training)
     x = torch.randn(2, 64, 32, generator=g).bfloat16()
     with torch.no_grad():
         got = moe(x)
     assert torch.equal(got, x * scale)
+
+
+class _Seen(torch.nn.Module):
+    def __init__(self, inner: torch.nn.Module, shapes: list[tuple[int, ...]]) -> None:
+        super().__init__()
+        self.inner = inner
+        self.shapes = shapes
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        self.shapes.append(tuple(x.shape))
+        out: torch.Tensor = self.inner(x)
+        return out
+
+
+def test_eval_moe_runs_each_chosen_expert_on_the_whole_batch(
+    tiny_model: Qwen3ForCausalLM,
+) -> None:
+    apply_surgery(tiny_model, SurgeryConfig(variant="moe", moe_experts=3, moe_top_k=2))
+    moe = tiny_model.model.layers[0].mlp
+    assert isinstance(moe, MoEMLP) and not moe.training
+    shapes: list[tuple[int, ...]] = []
+    moe.experts = torch.nn.ModuleList(_Seen(e, shapes) for e in moe.experts)
+    with torch.no_grad():
+        moe.router.weight.normal_(0, 1.0)
+    x = torch.randn(3, 5, 32, generator=torch.Generator().manual_seed(4))
+    with torch.no_grad():
+        _, _, chosen = moe.route(x.reshape(-1, 32))
+        moe(x)
+    assert len(shapes) == len(set(chosen.flatten().tolist())) >= 2
+    assert all(shape == (3, 5, 32) for shape in shapes)
+
+
+@pytest.mark.parametrize("top_k", [1, 2, 3])
+def test_eval_moe_mix_matches_the_sparse_training_mix(
+    tiny_model: Qwen3ForCausalLM, top_k: int
+) -> None:
+    apply_surgery(tiny_model, SurgeryConfig(variant="moe", moe_experts=3, moe_top_k=top_k))
+    moe = tiny_model.model.layers[0].mlp
+    assert isinstance(moe, MoEMLP)
+    with torch.no_grad():
+        for i, expert in enumerate(moe.experts):
+            expert.down_proj.weight.mul_(1.0 + 0.5 * i)
+        moe.router.weight.normal_(0, 1.0)
+    x = torch.randn(2, 7, 32, generator=torch.Generator().manual_seed(5))
+    with torch.no_grad():
+        mixed = moe.eval()(x)
+        sparse = moe.train()(x)
+    torch.testing.assert_close(mixed, sparse, rtol=1e-5, atol=1e-5)
 
 
 def test_moe_identical_experts_match_full_modes_in_bf16(tiny_model: Qwen3ForCausalLM) -> None:
