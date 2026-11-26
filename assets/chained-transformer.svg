@@ -1,30 +1,35 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
   <title id="title">chained-transformer</title>
-  <desc id="desc">Three soft spheres linked in a rising chain on a navy gradient tile, the last one warm.</desc>
+  <desc id="desc">Three soft spheres in violet, coral and amber linked in a rising chain on a deep indigo gradient tile.</desc>
   <defs>
     <linearGradient id="tile" x1="32" y1="0" x2="32" y2="64" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#22325a"/>
-      <stop offset="1" stop-color="#0d1322"/>
+      <stop stop-color="#33246b"/>
+      <stop offset="1" stop-color="#120c26"/>
     </linearGradient>
-    <radialGradient id="mint" cx="0.35" cy="0.32" r="0.75">
-      <stop stop-color="#d8fbf0"/>
-      <stop offset="0.45" stop-color="#7fd8c3"/>
-      <stop offset="1" stop-color="#2f8582"/>
+    <radialGradient id="violet" cx="0.35" cy="0.32" r="0.75">
+      <stop stop-color="#ece6ff"/>
+      <stop offset="0.45" stop-color="#a48bff"/>
+      <stop offset="1" stop-color="#5a3ccf"/>
+    </radialGradient>
+    <radialGradient id="coral" cx="0.35" cy="0.32" r="0.75">
+      <stop stop-color="#ffe1e8"/>
+      <stop offset="0.45" stop-color="#ff7f9f"/>
+      <stop offset="1" stop-color="#c2456b"/>
     </radialGradient>
     <radialGradient id="warm" cx="0.35" cy="0.32" r="0.75">
       <stop stop-color="#fff4cf"/>
-      <stop offset="0.45" stop-color="#f6cf6b"/>
-      <stop offset="1" stop-color="#c98d2c"/>
+      <stop offset="0.45" stop-color="#ffc94d"/>
+      <stop offset="1" stop-color="#d48a14"/>
     </radialGradient>
   </defs>
   <rect width="64" height="64" rx="15" fill="url(#tile)"/>
-  <g fill="#2a4f6b" opacity="0.75">
+  <g fill="#4a3a8c" opacity="0.6">
     <ellipse cx="16" cy="52" rx="6.5" ry="2.6"/>
     <ellipse cx="32" cy="41" rx="6.5" ry="2.6"/>
     <ellipse cx="48" cy="30" rx="7" ry="2.8"/>
   </g>
-  <path d="M 16 42 L 32 31 L 48 19" fill="none" stroke="#5fb8a8" stroke-width="3.5" stroke-linecap="round"/>
-  <circle cx="16" cy="42" r="7" fill="url(#mint)"/>
-  <circle cx="32" cy="31" r="7" fill="url(#mint)"/>
+  <path d="M 16 42 L 32 31 L 48 19" fill="none" stroke="#b9a8ff" stroke-opacity="0.7" stroke-width="3.5" stroke-linecap="round"/>
+  <circle cx="16" cy="42" r="7" fill="url(#violet)"/>
+  <circle cx="32" cy="31" r="7" fill="url(#coral)"/>
   <circle cx="48" cy="19" r="7.5" fill="url(#warm)"/>
 </svg>
