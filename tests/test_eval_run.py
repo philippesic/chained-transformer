@@ -7,8 +7,9 @@ from typing import Any
 
 import pytest
 
+from chained_transformer.modes import THINK_CLOSE, THINK_OPEN
 from evals.run import main, read_jsonl
-from tools.tiny_checkpoint import build
+from tools.tiny_checkpoint import build, toy_tokenizer
 
 MATH_ROWS = [
     {"problem": "What is $2+2$?", "answer": "4", "unique_id": "t/1", "subject": "A", "level": 1},
@@ -104,6 +105,30 @@ def test_model_run_writes_consistent_report(
             assert sum(n for _, n in row["mode_runs"]) == row["new_tokens"]
             assert len(row["mode_runs"]) == row["switches"] + 1
         assert len(read_jsonl(tmp_path / name / "scores.jsonl")) == 2
+
+
+def test_think_tags_survive_decoding_as_qwen3_keeps_them() -> None:
+    tok = toy_tokenizer()
+    text = f"{THINK_OPEN}\nso{THINK_CLOSE}\n\n4"
+    ids = tok(text + tok.eos_token, add_special_tokens=False).input_ids
+    assert tok.decode(ids, skip_special_tokens=True) == text
+
+
+def test_closed_thinking_is_counted_from_the_decoded_text(
+    tmp_path: Path, data: dict[str, Path], models: dict[str, Path]
+) -> None:
+    report = _run(
+        data, tmp_path, "--model", str(models["plain1"]), extra=("--max-new-tokens", "24")
+    )
+    answered = []
+    for name in ("math500", "livecodebench"):
+        rows = read_jsonl(tmp_path / name / "responses.jsonl")
+        shut = [r for r in rows if THINK_CLOSE in r["text"]]
+        bench = report["benchmarks"][name]
+        assert bench["modes"]["think_closed_rate"] == len(shut) / len(rows)
+        assert bench["leakage"]["n_closed"] == len(shut)
+        answered += [r["tokens_by_mode"]["answer"] > 0 for r in shut]
+    assert any(answered)
 
 
 def test_auto_batch_size_fills_the_batch_on_cpu(
