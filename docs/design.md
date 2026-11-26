@@ -118,8 +118,8 @@ python -m chained_transformer.upgrade swap --checkpoint CKPT --pack PACK --out C
 python -m chained_transformer.upgrade measure --checkpoint CKPT-upgraded --reference CKPT --data DATA --limit 200 --out measure.json
 ```
 
-`retrain` uses the same 8-bit AdamW with bf16 stochastic rounding as training when it runs in
-bf16 on CUDA, and writes `train.jsonl` next to the pack. Then run `evals.run` on the upgraded
+In bf16, on any device, `retrain` uses training's default optimizer (`ChunkedAdamW8bit`, with bf16
+stochastic rounding). It writes `train.jsonl` next to the pack. Then run `evals.run` on the upgraded
 checkpoint. `tools/upgrade_demo.py` runs the whole idea on a tiny synthetic task on CPU; see
 [results/upgrade-demo](../results/upgrade-demo/result.md).
 

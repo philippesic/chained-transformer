@@ -137,7 +137,8 @@ def test_moe_has_no_mode_pack(tiny_model: Qwen3ForCausalLM) -> None:
         mode_tensors(_convert(tiny_model, "moe"), CODE)
 
 
-def test_cli_retrain_swap_measure(tmp_path: Path, tiny_model: Qwen3ForCausalLM) -> None:
+@pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
+def test_cli_retrain_swap_measure(tmp_path: Path, tiny_model: Qwen3ForCausalLM, dtype: str) -> None:
     from datasets import Dataset
 
     from chained_transformer.checkpoint import save_checkpoint
@@ -146,7 +147,7 @@ def test_cli_retrain_swap_measure(tmp_path: Path, tiny_model: Qwen3ForCausalLM) 
     rows = [_row(i) for i in range(6)]
     Dataset.from_list(rows).save_to_disk(str(tmp_path / "data"))
     save_checkpoint(_convert(tiny_model, "full"), tmp_path / "ckpt")
-    cpu = ["--device", "cpu", "--dtype", "float32"]
+    cpu = ["--device", "cpu", "--dtype", dtype]
     data = ["--data", str(tmp_path / "data"), "--seq-len", "64"]
     pack = tmp_path / "pack"
     main(

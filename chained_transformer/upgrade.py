@@ -20,8 +20,9 @@ from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 from chained_transformer.checkpoint import load_checkpoint, save_checkpoint
 from chained_transformer.model import Built
 from chained_transformer.modes import MODE_NAMES, Mode
+from chained_transformer.optim import DEFAULT_CHUNK
 from chained_transformer.surgery import Routing, freeze_all_but_mode, mode_parameters
-from chained_transformer.train import IGNORE, make_batch, token_losses
+from chained_transformer.train import IGNORE, make_batch, make_optimizer, token_losses
 
 PACK_FORMAT = 1
 LossOn = Literal["mode", "all"]
@@ -330,12 +331,9 @@ def cmd_retrain(args: argparse.Namespace) -> None:
     if not args.no_grad_ckpt:
         model.activation_checkpointing_enable({"use_reentrant": False})
     optimizer = None
-    if args.device.startswith("cuda") and args.dtype == "bfloat16":
-        from torchao.optim import AdamW8bit
-
-        optimizer = AdamW8bit(
-            mode_parameters(model, mode), lr=args.lr, weight_decay=0.0, bf16_stochastic_round=True
-        )
+    if args.dtype == "bfloat16":
+        params = mode_parameters(model, mode)
+        optimizer = make_optimizer(params, "chunked", args.lr, DEFAULT_CHUNK, args.seed)
     args.out.mkdir(parents=True, exist_ok=True)
     with (args.out / "train.jsonl").open("w") as log_file:
 
