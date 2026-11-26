@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chained-transformer-vllm-plugin"
+version = "0.0.0"
+requires-python = ">=3.10"
+
+[project.entry-points."vllm.general_plugins"]
+chained_transformer = "chained_vllm_entry:register"
+
+[tool.setuptools]
+py-modules = ["chained_vllm_entry"]

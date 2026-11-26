@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import torch
-from transformers import Qwen3Config, Qwen3ForCausalLM
+from transformers import GenerationConfig, Qwen3Config, Qwen3ForCausalLM
 
-from chained_transformer.generate import TokenTexts
+from chained_transformer.generate import TokenTexts, mode_tracking
 from chained_transformer.surgery import ModeMLP, Routing, SurgeryConfig, apply_surgery
 
 TINY_SPECIAL = {
@@ -78,3 +78,18 @@ def collapse_modes(model: Qwen3ForCausalLM) -> None:
             assert isinstance(mlp, ModeMLP)
             for mode in mlp.modes[1:]:
                 mode.load_state_dict(mlp.modes[0].state_dict())
+
+
+def tiny_greedy(
+    model: Qwen3ForCausalLM, routing: Routing, prompts: list[list[int]], new_tokens: int
+) -> tuple[list[list[int]], list[list[int]]]:
+    cfg = GenerationConfig(
+        max_new_tokens=new_tokens, do_sample=False, eos_token_id=None, pad_token_id=TINY_PAD
+    )
+    tokens, traces = [], []
+    for prompt in prompts:
+        with torch.no_grad(), mode_tracking(model, routing, tiny_texts()) as hook:
+            out = model.generate(torch.tensor([prompt]), generation_config=cfg)
+        tokens.append(out[0, len(prompt) :].tolist())
+        traces.append(hook.trace[0])
+    return tokens, traces
