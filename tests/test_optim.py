@@ -127,3 +127,29 @@ def test_fp32_grads_are_left_untouched_by_the_step() -> None:
     p.grad = torch.full_like(p, 3.0)
     ChunkedAdamW8bit([p], lr=0.1).step()
     assert torch.equal(p.grad, torch.full_like(p, 3.0))
+
+
+@pytest.mark.parametrize("numel", [BLOCK * 16, 1000, 4100])
+def test_uneven_last_chunk_matches_a_single_chunk(numel: int) -> None:
+    g = torch.Generator().manual_seed(3)
+    init = torch.randn(numel, generator=g)
+    grads = [torch.randn(numel, generator=g) for _ in range(3)]
+    results = []
+    for chunk in (BLOCK * 3, BLOCK * 4096):
+        p = torch.nn.Parameter(init.clone())
+        opt = ChunkedAdamW8bit([p], lr=1e-2, weight_decay=0.1, chunk_numel=chunk)
+        for grad in grads:
+            p.grad = grad.clone()
+            opt.step()
+        results.append((p.detach().clone(), opt.state[p]))
+    (pa, sa), (pb, sb) = results
+    assert ("m_codes" in sa) == (numel == BLOCK * 16)
+    assert torch.equal(pa, pb)
+    for key, value in sa.items():
+        if isinstance(value, torch.Tensor):
+            assert torch.equal(value, sb[key]), key
+
+
+def test_chunk_size_must_be_a_whole_number_of_blocks() -> None:
+    with pytest.raises(ValueError, match="multiple"):
+        ChunkedAdamW8bit([torch.nn.Parameter(torch.ones(4))], chunk_numel=BLOCK + 1)
