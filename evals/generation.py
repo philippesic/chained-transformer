@@ -19,6 +19,9 @@ from evals.types import Problem
 
 DEFAULT_TOKENIZER = "Qwen/Qwen3-0.6B"
 EOS_TOKENS = ("<|im_end|>", "<|endoftext|>")
+AUTO_BATCH_CAP = 16
+KV_FRACTION = 0.8
+GiB = 2**30
 
 
 @dataclass(frozen=True)
@@ -225,6 +228,53 @@ def _generate_separate(
     )
 
 
+def kv_bytes_per_token(models: Sequence[Qwen3ForCausalLM]) -> int:
+    total = 0
+    for m in models:
+        c = m.config
+        head_dim = getattr(c, "head_dim", None) or c.hidden_size // c.num_attention_heads
+        kv_heads = c.num_key_value_heads or c.num_attention_heads
+        total += 2 * c.num_hidden_layers * kv_heads * head_dim * m.dtype.itemsize
+    return total
+
+
+def sequence_bytes(models: Sequence[Qwen3ForCausalLM], prompt_tokens: int, new_tokens: int) -> int:
+    heads = max(m.config.num_attention_heads for m in models)
+    kv = kv_bytes_per_token(models) * (prompt_tokens + new_tokens)
+    return kv + heads * prompt_tokens * prompt_tokens * 4
+
+
+def fit_batch(wanted: int, per_sequence: int, free: int, auto: bool) -> int:
+    fits = int(free * KV_FRACTION) // per_sequence
+    if fits >= wanted:
+        return wanted
+    if auto and fits >= 1:
+        return fits
+    need = wanted * per_sequence / GiB
+    budget = free * KV_FRACTION / GiB
+    advice = f"pass --batch-size {fits} or auto" if fits else "lower --max-new-tokens"
+    raise RuntimeError(
+        f"batch {wanted} needs about {need:.1f} GiB of KV cache and prefill attention, but "
+        f"{budget:.1f} GiB of the {free / GiB:.1f} GiB free on the GPU is budgeted for it; {advice}"
+    )
+
+
+def resolve_batch(runner: Runner, problems: Sequence[Problem], settings: GenSettings) -> int:
+    auto = settings.batch_size == 0
+    wanted = 1 if runner.separate else (AUTO_BATCH_CAP if auto else settings.batch_size)
+    wanted = max(1, min(wanted, len(problems)))
+    if runner.device.type != "cuda" or not problems:
+        return wanted
+    tok = runner.tokenizer
+    longest = max(
+        len(tok(chat_prompt(tok, p, settings.enable_thinking), add_special_tokens=False).input_ids)
+        for p in problems
+    )
+    per_sequence = sequence_bytes(runner.models, longest, settings.max_new_tokens)
+    free, _ = torch.cuda.mem_get_info(runner.device)
+    return fit_batch(wanted, per_sequence, free, auto and not runner.separate)
+
+
 def peak_memory_gib(device: torch.device) -> dict[str, float]:
     if device.type == "cuda":
         return {"peak_alloc_gib": round(torch.cuda.max_memory_allocated(device) / 2**30, 3)}
@@ -241,9 +291,9 @@ def generate_all(
     texts = TokenTexts.from_tokenizer(runner.tokenizer)
     if runner.device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(runner.device)
+    step = resolve_batch(runner, problems, settings)
     results: list[Generation] = []
     start = time.perf_counter()
-    step = 1 if runner.separate else max(1, settings.batch_size)
     for i in range(0, len(problems), step):
         chunk = problems[i : i + step]
         if runner.separate:
@@ -260,6 +310,7 @@ def generate_all(
         "seconds": round(elapsed, 2),
         "new_tokens": tokens,
         "tokens_per_s": round(tokens / elapsed, 2) if elapsed > 0 else 0.0,
+        "batch_size": step,
         **peak_memory_gib(runner.device),
     }
     return results, perf

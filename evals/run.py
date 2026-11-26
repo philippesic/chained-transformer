@@ -14,6 +14,7 @@ from typing import Any
 import torch
 
 from chained_transformer.modes import MODE_NAMES
+from chained_transformer.train import configure_allocator
 from evals import humanevalplus, livecodebench, math500
 from evals.generation import Generation, GenSettings, Runner, generate_all, load_runner
 from evals.leakage import aggregate
@@ -191,6 +192,15 @@ def parse_sources(items: Sequence[str]) -> dict[str, str]:
     return sources
 
 
+def batch_size_arg(value: str) -> int:
+    if value == "auto":
+        return 0
+    size = int(value)
+    if size < 1:
+        raise argparse.ArgumentTypeError("batch size must be at least 1, or auto")
+    return size
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Generate with a checkpoint and score benchmarks")
     who = parser.add_mutually_exclusive_group(required=True)
@@ -209,7 +219,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--top-k", type=int, default=20)
-    parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument(
+        "--batch-size", type=batch_size_arg, default=1, help="N, or auto to fill the GPU"
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--no-thinking", action="store_true")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -217,6 +229,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
+    if args.device.startswith("cuda"):
+        configure_allocator()
     dtype = (
         DTYPES[args.dtype]
         if args.dtype

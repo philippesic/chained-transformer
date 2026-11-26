@@ -105,6 +105,14 @@ def test_model_run_writes_consistent_report(
         assert len(read_jsonl(tmp_path / name / "scores.jsonl")) == 2
 
 
+def test_auto_batch_size_fills_the_batch_on_cpu(
+    tmp_path: Path, data: dict[str, Path], models: dict[str, Path]
+) -> None:
+    report = _run(data, tmp_path, "--model", str(models["full"]), extra=("--batch-size", "auto"))
+    assert report["generation"]["batch_size"] == 0
+    assert report["benchmarks"]["math500"]["perf"]["batch_size"] == 2
+
+
 def test_score_only_reuses_responses(
     tmp_path: Path, data: dict[str, Path], models: dict[str, Path]
 ) -> None:
