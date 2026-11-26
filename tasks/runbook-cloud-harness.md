@@ -161,9 +161,11 @@ pueue add -g ct -- uv run --locked --no-sync python -m tools.gpu_equivalence --v
 ```
 
 Each printed line is: variant, dtype, identical tokens, first divergence, max logit difference,
-first mode switches. Pass: every `moe` line reads `moe torch.bfloat16 True None`, like the
-`full` lines, with a max logit difference about as small as `full`'s. Before the fix, `moe`
-diverged with differences of 0.4 to 0.66.
+first mode switches, batch size. Each prompt runs alone (`batch=1`, up to 1,200 new tokens) and
+then all three together, left-padded the way the evals batch them (`batch=3`). Pass: every `moe`
+line reads `moe torch.bfloat16 True None` with a max logit difference of 0. A `full` line with
+`batch=3` can show a small logit difference when its rows sit in different modes. Before the fix,
+`moe` diverged with differences of 0.4 to 0.66.
 
 If it fails: if `full` diverges too, the drift is in generation, not in the MoE combine. If only
 `moe` does, note how large the logit difference is now against 0.4 to 0.66 before.

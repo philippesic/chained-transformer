@@ -29,60 +29,116 @@ def switches(trace: list[int]) -> list[str]:
     return out
 
 
+def chat(tok: Any, prompt: str, thinking: bool) -> str:
+    text: str = tok.apply_chat_template(
+        [{"role": "user", "content": prompt}],
+        tokenize=False,
+        add_generation_prompt=True,
+        enable_thinking=thinking,
+    )
+    return text
+
+
+def on_cpu(out: Any) -> tuple[torch.Tensor, list[torch.Tensor]]:
+    return out.sequences.cpu(), [s.float().cpu() for s in out.scores]
+
+
+def compare(
+    want: tuple[torch.Tensor, list[torch.Tensor]],
+    got: tuple[torch.Tensor, list[torch.Tensor]],
+    row: int,
+    width: int,
+) -> dict[str, Any]:
+    a = want[0][row, width:].tolist()
+    b = got[0][row, width:].tolist()
+    first_diff = next((i for i, (x, y) in enumerate(zip(a, b, strict=False)) if x != y), None)
+    if first_diff is None and len(a) != len(b):
+        first_diff = min(len(a), len(b))
+    shared = min(len(want[1]), len(got[1]))
+    if first_diff is not None:
+        shared = min(shared, first_diff + 1)
+    logit_diff = max(
+        (float((want[1][i][row] - got[1][i][row]).abs().max()) for i in range(shared)),
+        default=0.0,
+    )
+    return {
+        "new_tokens": len(b),
+        "identical_tokens": a == b,
+        "first_divergence": first_diff,
+        "max_abs_logit_diff": logit_diff,
+    }
+
+
 def run(variant: Variant, max_new_tokens: int, dtype: torch.dtype, device: str) -> dict[str, Any]:
     tok = load_tokenizer()
+    tok.padding_side = "left"
     texts = TokenTexts.from_tokenizer(tok)
     base = load_base(dtype=dtype, device=device)
     base.eval()
     routed = copy.deepcopy(base)
     routing = apply_surgery(routed, SurgeryConfig(variant=variant))
     routed.eval()
+    gen_kwargs: dict[str, Any] = {
+        "max_new_tokens": max_new_tokens,
+        "do_sample": False,
+        "output_scores": True,
+        "return_dict_in_generate": True,
+        "pad_token_id": tok.pad_token_id,
+    }
     results = []
     for prompt, thinking in PROMPTS:
-        text = tok.apply_chat_template(
-            [{"role": "user", "content": prompt}],
-            tokenize=False,
-            add_generation_prompt=True,
-            enable_thinking=thinking,
-        )
-        ids = tok(text, return_tensors="pt", add_special_tokens=False).input_ids.to(device)
-        gen_kwargs = {
-            "max_new_tokens": max_new_tokens,
-            "do_sample": False,
-            "output_scores": True,
-            "return_dict_in_generate": True,
-        }
+        enc = tok(chat(tok, prompt, thinking), return_tensors="pt", add_special_tokens=False)
+        ids = enc.input_ids.to(device)
         with torch.no_grad():
             t0 = time.perf_counter()
-            want = base.generate(ids, **gen_kwargs)
+            want = on_cpu(base.generate(ids, **gen_kwargs))
             base_s = time.perf_counter() - t0
             with mode_tracking(routed, routing, texts) as hook:
                 t0 = time.perf_counter()
-                got = routed.generate(ids, **gen_kwargs)
+                got = on_cpu(routed.generate(ids, **gen_kwargs))
                 routed_s = time.perf_counter() - t0
-        a = want.sequences[0, ids.shape[1] :].tolist()
-        b = got.sequences[0, ids.shape[1] :].tolist()
-        first_diff = next((i for i, (x, y) in enumerate(zip(a, b, strict=False)) if x != y), None)
-        shared = min(len(want.scores), len(got.scores))
-        if first_diff is not None:
-            shared = min(shared, first_diff + 1)
-        logit_diff = max(float((want.scores[i] - got.scores[i]).abs().max()) for i in range(shared))
+        width = ids.shape[1]
+        item = compare(want, got, 0, width)
         trace = hook.trace[0]
         results.append(
             {
                 "prompt": prompt,
                 "enable_thinking": thinking,
-                "new_tokens": len(b),
-                "identical_tokens": a == b,
-                "first_divergence": first_diff,
-                "max_abs_logit_diff": logit_diff,
-                "mode_switches": switches(trace[ids.shape[1] - 1 :]),
+                "batch": 1,
+                **item,
+                "mode_switches": switches(trace[width - 1 :]),
                 "generated_tokens_by_mode": {
-                    MODE_NAMES[m]: trace[ids.shape[1] - 1 :].count(m) for m in range(3)
+                    MODE_NAMES[m]: trace[width - 1 :].count(m) for m in range(3)
                 },
-                "base_tok_per_s": round(len(a) / base_s, 1),
-                "routed_tok_per_s": round(len(b) / routed_s, 1),
-                "sample_tail": tok.decode(b[-60:]),
+                "base_tok_per_s": round(len(want[0][0, width:]) / base_s, 1),
+                "routed_tok_per_s": round(item["new_tokens"] / routed_s, 1),
+                "sample_tail": tok.decode(got[0][0, width:].tolist()[-60:]),
+            }
+        )
+    batch = tok(
+        [chat(tok, prompt, thinking) for prompt, thinking in PROMPTS],
+        return_tensors="pt",
+        padding=True,
+        add_special_tokens=False,
+    ).to(device)
+    inputs = {"input_ids": batch.input_ids, "attention_mask": batch.attention_mask}
+    with torch.no_grad():
+        want = on_cpu(base.generate(**inputs, **gen_kwargs))
+        with mode_tracking(routed, routing, texts) as hook:
+            got = on_cpu(routed.generate(**inputs, **gen_kwargs))
+    width = batch.input_ids.shape[1]
+    for row, (prompt, thinking) in enumerate(PROMPTS):
+        trace = hook.trace[row]
+        results.append(
+            {
+                "prompt": prompt,
+                "enable_thinking": thinking,
+                "batch": len(PROMPTS),
+                **compare(want, got, row, width),
+                "mode_switches": switches(trace[width - 1 :]),
+                "generated_tokens_by_mode": {
+                    MODE_NAMES[m]: trace[width - 1 :].count(m) for m in range(3)
+                },
             }
         )
     return {
@@ -102,7 +158,7 @@ def main() -> None:
     parser.add_argument(
         "--variants", nargs="+", choices=get_args(Variant), default=list(get_args(Variant))
     )
-    parser.add_argument("--max-new-tokens", type=int, default=400)
+    parser.add_argument("--max-new-tokens", type=int, default=1200)
     parser.add_argument("--dtype", choices=["bfloat16", "float32"], default="bfloat16")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--out", type=Path, required=True)
@@ -121,6 +177,7 @@ def main() -> None:
                 item["first_divergence"],
                 f"{item['max_abs_logit_diff']:.3g}",
                 item["mode_switches"][:6],
+                f"batch={item['batch']}",
             )
 
 
