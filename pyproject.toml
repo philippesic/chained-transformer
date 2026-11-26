@@ -33,7 +33,7 @@ required-environments = ["sys_platform == 'linux' and platform_machine == 'x86_6
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-markers = ["gpu: needs the RTX 5080 and the downloaded base model"]
+markers = ["gpu: needs a CUDA GPU; run with -m gpu"]
 addopts = "-m 'not gpu'"
 
 [tool.ruff]
