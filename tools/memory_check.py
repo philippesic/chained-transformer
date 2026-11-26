@@ -60,9 +60,9 @@ def shape_config(shape: ModelShape) -> Any:
         num_key_value_heads=shape.kv_heads,
         head_dim=shape.head_dim,
         max_position_embeddings=40960,
-        rope_theta=1_000_000.0,
+        rope_parameters={"rope_type": "default", "rope_theta": 1_000_000.0},
         tie_word_embeddings=shape.tied,
-        torch_dtype="bfloat16",
+        dtype="bfloat16",
     )
 
 
