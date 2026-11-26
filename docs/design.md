@@ -5,7 +5,7 @@ How the maintained code works now. Open choices live in the
 
 ## Terms
 
-- **Mode**: one MLP set per layer. `think` = 0, `code` = 1, `answer` = 2 (`mode_mlp/modes.py`).
+- **Mode**: one MLP set per layer. `think` = 0, `code` = 1, `answer` = 2 (`chained_transformer/modes.py`).
 - **Position mode**: the mode whose MLP runs at a position. It is the tracker state *after*
   reading that position's token, so it is the mode that produces the next token.
 - **Segment label**: the mode that produced a token, which is the position mode of the token
@@ -15,7 +15,7 @@ How the maintained code works now. Open choices live in the
 - **Complete row**: a training row that contains `</think>` and has fewer than 16,000
   assistant tokens (see [data](#data)).
 
-## Mode tracking (`mode_mlp/modes.py`)
+## Mode tracking (`chained_transformer/modes.py`)
 
 `ModeTracker` is a character-level state machine with no lookahead. Training labels and
 generation use the same tracker, fed token strings in order, so a model trained on these labels
@@ -37,7 +37,7 @@ Rules:
   fence does not close it. Inline triple backticks and `~~~` fences are not tracked.
 - An unclosed fence in the answer stays `code` until `<|im_end|>`.
 
-## Model surgery (`mode_mlp/surgery.py`)
+## Model surgery (`chained_transformer/surgery.py`)
 
 `apply_surgery(model, SurgeryConfig)` replaces every Qwen3 decoder layer's `mlp` and leaves
 attention and the KV cache untouched, which is why one cache serves every mode. Variants:
@@ -61,7 +61,7 @@ wrongly shaped `mode_ids` raises an error naming the repair.
 `freeze_all_but_mode(model, m)` leaves only mode `m`'s MLP (or its LoRA tensors) trainable,
 for single-mode retraining.
 
-## Generation (`mode_mlp/generate.py`)
+## Generation (`chained_transformer/generate.py`)
 
 `mode_tracking(model, routing, texts)` registers a forward pre-hook. On prefill it starts one
 tracker per batch row and feeds it the prompt; on each decode step it feeds the new token and
@@ -72,9 +72,9 @@ per-row mode trace. `TokenTexts` decodes each vocabulary id once.
 When the mode changes, the incoming model prefills every token it has not yet seen, then
 decodes. It reports switches and re-prefilled tokens.
 
-## Data (`mode_mlp/data.py`)
+## Data (`chained_transformer/data.py`)
 
-`python -m mode_mlp.data --rows N --shards S` reads the first `N/S` rows of `S` evenly spaced
+`python -m chained_transformer.data --rows N --shards S` reads the first `N/S` rows of `S` evenly spaced
 parquet shards of OpenThoughts3 directly from the Hub, renders the Qwen chat format by hand,
 tokenizes, labels position modes and writes an Arrow dataset with `input_ids` (int32),
 `mode_ids` and `loss_mask` (int8), domain, source and completeness flags, plus `stats.json`.
@@ -84,7 +84,7 @@ The dataset is sorted by domain, so the first shard is all code; 16 shards give 
 1,000 code rows and no science rows. Many traces are cut off near 16k tokens; see the
 [slice result](../results/ot3-slice-composition/result.md).
 
-## Training (`mode_mlp/train.py`)
+## Training (`chained_transformer/train.py`)
 
 One loop serves every arm: `--arm`, plus `--mode` for `separate` (loss only on that label) and
 `--only-mode` for single-mode retraining. Precision is bf16 weights with torchao `AdamW8bit`
@@ -98,7 +98,7 @@ loss by segment label, MoE balance loss, gradient norm, step time and peak memor
 Rows are currently truncated to their first `--seq-len` tokens, one row per micro-batch.
 Checkpoint saving is not implemented yet.
 
-## Evals (`mode_mlp/evals.py`)
+## Evals (`chained_transformer/evals.py`)
 
 Stubs, not full runs. Generation goes through `generate_responses`, which uses the mode hook
 when a routing object is given and records tokens per mode, tokens/s and peak memory.

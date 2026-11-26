@@ -14,9 +14,9 @@ import torch
 from transformers import GenerationConfig, PreTrainedTokenizerBase
 from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 
-from mode_mlp.generate import TokenTexts, mode_tracking
-from mode_mlp.modes import MODE_NAMES, THINK_CLOSE, Mode, ModeTracker
-from mode_mlp.surgery import Routing
+from chained_transformer.generate import TokenTexts, mode_tracking
+from chained_transformer.modes import MODE_NAMES, THINK_CLOSE, Mode, ModeTracker
+from chained_transformer.surgery import Routing
 
 MATH500 = "HuggingFaceH4/MATH-500"
 LIVECODEBENCH = "livecodebench/code_generation_lite"
@@ -186,7 +186,7 @@ def summarize(
 
 
 def main() -> None:
-    from mode_mlp.model import load_base, load_tokenizer
+    from chained_transformer.model import load_base, load_tokenizer
 
     parser = argparse.ArgumentParser(description="Stub eval runner (base model only for now)")
     parser.add_argument("benchmark", choices=["math500", "humanevalplus", "livecodebench"])

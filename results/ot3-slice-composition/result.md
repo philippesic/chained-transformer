@@ -17,7 +17,7 @@ and 16.5k tokens, the sign of a generation cap. Truncated traces often end mid-s
 some drift into mixed Chinese and English.
 
 **Conditions.** Rows 0 to 249 of 16 evenly spaced shards (`train-00000` to `train-00105`,
-step 7), labelled with the tracker in `mode_mlp/modes.py` as of this commit and tokenized with
+step 7), labelled with the tracker in `chained_transformer/modes.py` as of this commit and tokenized with
 the Qwen3-0.6B tokenizer. The dataset is sorted by domain: these shards held math and code,
 no science. The 16,000-token completeness threshold is a heuristic chosen from that pile-up.
 
@@ -28,5 +28,5 @@ length. "Code" counts only fenced blocks; code written in unfenced prose stays `
 **Disposition.** Feeds the open data decision in the
 [first-experiment task](../../tasks/first-experiment.md). Evidence: [stats.json](stats.json).
 The slice itself (`artifacts/data/ot3-slice-4k`, 359 MB) is regenerable with
-`python -m mode_mlp.data --rows 4000 --shards 16`; it is kept for the GPU smoke and is
+`python -m chained_transformer.data --rows 4000 --shards 16`; it is kept for the GPU smoke and is
 disposable once the training data decision produces a new slice.

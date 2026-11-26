@@ -9,8 +9,8 @@ import torch
 from datasets import Dataset
 from transformers import Qwen3ForCausalLM
 
-from mode_mlp.model import ARMS
-from mode_mlp.train import IGNORE, main, make_batch
+from chained_transformer.model import ARMS
+from chained_transformer.train import IGNORE, main, make_batch
 
 ROW = {
     "input_ids": [5, 6, 7, 8, 9, 10, 11],

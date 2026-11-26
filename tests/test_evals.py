@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mode_mlp.evals import (
+from chained_transformer.evals import (
     extract_code,
     final_answer,
     score_math,

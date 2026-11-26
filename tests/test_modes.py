@@ -4,7 +4,7 @@ import random
 
 import pytest
 
-from mode_mlp.modes import Mode, ModeTracker, position_modes, segment_labels
+from chained_transformer.modes import Mode, ModeTracker, position_modes, segment_labels
 
 T, C, A = Mode.THINK, Mode.CODE, Mode.ANSWER
 ASSISTANT = "<|im_start|>assistant\n"

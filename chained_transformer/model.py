@@ -8,7 +8,7 @@ from torch import nn
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase
 from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 
-from mode_mlp.surgery import Routing, SurgeryConfig, Variant, apply_surgery
+from chained_transformer.surgery import Routing, SurgeryConfig, Variant, apply_surgery
 
 BASE_MODEL = "Qwen/Qwen3-0.6B"
 

@@ -9,8 +9,8 @@ import torch
 from torch import nn
 from transformers import DynamicCache, PreTrainedTokenizerBase
 
-from mode_mlp.modes import Mode, ModeTracker
-from mode_mlp.surgery import Routing
+from chained_transformer.modes import Mode, ModeTracker
+from chained_transformer.surgery import Routing
 
 
 class TokenTexts:

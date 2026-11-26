@@ -12,7 +12,7 @@ from torch import nn
 from transformers import PreTrainedModel
 from transformers.models.qwen3.modeling_qwen3 import Qwen3MLP
 
-from mode_mlp.modes import MODE_NAMES
+from chained_transformer.modes import MODE_NAMES
 
 Variant = Literal["full", "lora", "moe"]
 

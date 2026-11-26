@@ -9,10 +9,10 @@ from typing import Any, get_args
 
 import torch
 
-from mode_mlp.generate import TokenTexts, mode_tracking
-from mode_mlp.model import load_base, load_tokenizer
-from mode_mlp.modes import MODE_NAMES
-from mode_mlp.surgery import SurgeryConfig, Variant, apply_surgery
+from chained_transformer.generate import TokenTexts, mode_tracking
+from chained_transformer.model import load_base, load_tokenizer
+from chained_transformer.modes import MODE_NAMES
+from chained_transformer.surgery import SurgeryConfig, Variant, apply_surgery
 
 PROMPTS: list[tuple[str, bool]] = [
     ("Write a Python function that reverses a string, then explain it in one sentence.", False),

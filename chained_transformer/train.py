@@ -18,9 +18,9 @@ from torch.utils.checkpoint import checkpoint
 from torchao.optim import AdamW8bit
 from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 
-from mode_mlp.model import ARMS, BASE_MODEL, Arm, build, load_base, param_counts
-from mode_mlp.modes import MODE_NAMES, Mode
-from mode_mlp.surgery import LoRALinear, SurgeryConfig, freeze_all_but_mode, moe_aux_loss
+from chained_transformer.model import ARMS, BASE_MODEL, Arm, build, load_base, param_counts
+from chained_transformer.modes import MODE_NAMES, Mode
+from chained_transformer.surgery import LoRALinear, SurgeryConfig, freeze_all_but_mode, moe_aux_loss
 
 IGNORE = -100
 

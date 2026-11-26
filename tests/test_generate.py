@@ -5,9 +5,9 @@ import copy
 import torch
 from transformers import GenerationConfig, Qwen3ForCausalLM
 
-from mode_mlp.generate import TokenTexts, generate_separate_models, mode_tracking
-from mode_mlp.modes import Mode
-from mode_mlp.surgery import SurgeryConfig, apply_surgery
+from chained_transformer.generate import TokenTexts, generate_separate_models, mode_tracking
+from chained_transformer.modes import Mode
+from chained_transformer.surgery import SurgeryConfig, apply_surgery
 
 SPECIAL = {0: "<|im_start|>", 1: "assistant\n", 2: "</think>", 3: "```\n", 4: "\n", 5: "<|im_end|>"}
 

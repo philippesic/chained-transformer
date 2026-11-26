@@ -33,7 +33,16 @@ def run(name: str, cmd: list[str], log_dir: Path) -> bool:
 
 
 def train_cmd(arm: str, out: Path, data: Path, steps: int, seq_len: int) -> list[str]:
-    cmd = [*PYTHON, "mode_mlp.train", "--arm", arm, "--data", str(data), "--out", str(out)]
+    cmd = [
+        *PYTHON,
+        "chained_transformer.train",
+        "--arm",
+        arm,
+        "--data",
+        str(data),
+        "--out",
+        str(out),
+    ]
     cmd += ["--steps", str(steps), "--seq-len", str(seq_len), "--complete-only"]
     return cmd + (["--mode", "answer"] if arm == "separate" else [])
 

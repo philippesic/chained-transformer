@@ -6,7 +6,7 @@ import pytest
 import torch
 from transformers import DynamicCache, Qwen3ForCausalLM
 
-from mode_mlp.surgery import (
+from chained_transformer.surgery import (
     MoEMLP,
     SurgeryConfig,
     Variant,

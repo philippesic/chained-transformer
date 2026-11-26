@@ -3,10 +3,10 @@ from __future__ import annotations
 import pytest
 from transformers import PreTrainedTokenizerBase
 
-from mode_mlp.data import encode, render
-from mode_mlp.generate import TokenTexts
-from mode_mlp.model import load_tokenizer
-from mode_mlp.modes import Mode, ModeTracker, segment_labels
+from chained_transformer.data import encode, render
+from chained_transformer.generate import TokenTexts
+from chained_transformer.model import load_tokenizer
+from chained_transformer.modes import Mode, ModeTracker, segment_labels
 
 
 @pytest.fixture(scope="module")

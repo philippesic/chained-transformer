@@ -14,7 +14,7 @@ git config core.hooksPath .githooks
 
 To update a dependency, change its pin in `pyproject.toml`, run `uv lock`, then the check and
 the GPU smoke. Model weights and datasets download into the Hugging Face cache
-(`~/.cache/huggingface`); `python -m mode_mlp.data` writes slices under `artifacts/data/`.
+(`~/.cache/huggingface`); `python -m chained_transformer.data` writes slices under `artifacts/data/`.
 
 ## Checks
 
@@ -36,7 +36,7 @@ Outputs go to `artifacts/smoke/<timestamp>/` (`smoke.json` plus one log per step
 
 - No code comments or docstrings; use names, types and tests. Rationale belongs in these docs
   or commit messages.
-- Product code in `mode_mlp/` never imports `tools/` or `tests/`.
+- Product code in `chained_transformer/` never imports `tools/` or `tests/`.
 - Everything large stays in ignored `artifacts/`. Compact evidence that a result needs is
   copied into `results/<name>/`.
 - The repository is local only: no remote, no push, until Philip says otherwise.

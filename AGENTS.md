@@ -18,11 +18,11 @@ sync itself. Local only: no remote, do not push or publish until Philip says so.
 
 ## Code map
 
-- `mode_mlp/modes.py`: the mode tracker; the single source of labelling rules for training and generation.
-- `mode_mlp/surgery.py`: `ModeMLP`, `LoRAModeMLP`, `MoEMLP`, `Routing`, `apply_surgery`.
-- `mode_mlp/generate.py`: the mode-tracking generation hook and the separate-models baseline.
-- `mode_mlp/model.py`: base model loading and arm construction.
-- `mode_mlp/data.py`, `mode_mlp/train.py`, `mode_mlp/evals.py`: entry points (`python -m ...`).
+- `chained_transformer/modes.py`: the mode tracker; the single source of labelling rules for training and generation.
+- `chained_transformer/surgery.py`: `ModeMLP`, `LoRAModeMLP`, `MoEMLP`, `Routing`, `apply_surgery`.
+- `chained_transformer/generate.py`: the mode-tracking generation hook and the separate-models baseline.
+- `chained_transformer/model.py`: base model loading and arm construction.
+- `chained_transformer/data.py`, `chained_transformer/train.py`, `chained_transformer/evals.py`: entry points (`python -m ...`).
 - `tools/check.py`: the commit gate. `tools/gpu_equivalence.py`, `tools/gpu_smoke.py`: hardware lanes.
 
 ## Rules

@@ -14,9 +14,9 @@ from datasets import Dataset, Features, Sequence, Value
 from huggingface_hub import HfFileSystem
 from transformers import PreTrainedTokenizerBase
 
-from mode_mlp.generate import TokenTexts
-from mode_mlp.model import BASE_MODEL, load_tokenizer
-from mode_mlp.modes import MODE_NAMES, THINK_CLOSE, segment_labels
+from chained_transformer.generate import TokenTexts
+from chained_transformer.model import BASE_MODEL, load_tokenizer
+from chained_transformer.modes import MODE_NAMES, THINK_CLOSE, segment_labels
 
 DATASET = "open-thoughts/OpenThoughts3-1.2M"
 DATASET_SHARDS = 120
