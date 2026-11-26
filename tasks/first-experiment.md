@@ -69,6 +69,6 @@ CLI that loads trained arms (the current CLI runs the base model only).
 
 ## Next
 
-Philip decided on 2026-11-26 not to queue the GPU smoke behind BitDraft: he will say when the
+Philip decided on 2026-11-26 not to queue the GPU smoke behind BitDraft and will say when the
 GPU is free. Then run `python -m tools.gpu_smoke`, record memory and step time here, and settle
 decisions 1 and 2.
