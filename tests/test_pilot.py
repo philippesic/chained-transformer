@@ -35,6 +35,23 @@ def test_plan_lists_every_arm_and_seed(tmp_path: Path) -> None:
     assert sum("train-one" in c for c in commands) == 14
 
 
+def test_each_eval_runs_right_after_its_last_training_run(tmp_path: Path) -> None:
+    root = _plan(tmp_path)
+    commands = (root / "commands.sh").read_text().splitlines()
+    steps = [(c.split()[-5], c.split()[-1]) for c in commands if "-one " in c]
+    assert steps[:4] == [
+        ("train-one", "sft-s0"),
+        ("eval-one", "sft-s0"),
+        ("train-one", "full-s0"),
+        ("eval-one", "full-s0"),
+    ]
+    answer = steps.index(("train-one", "separate-s0-answer"))
+    assert steps[answer + 1] == ("eval-one", "separate-s0")
+    assert len(steps) == 24 and steps[-1] == ("eval-one", "separate-s1")
+    sft = json.loads((root / "plan.json").read_text())["eval"][0]["argv"]
+    assert sft[sft.index("--batch-size") + 1] == "auto"
+
+
 def test_plan_refuses_to_change_a_fixed_config(tmp_path: Path) -> None:
     _plan(tmp_path)
     _plan(tmp_path)

@@ -39,7 +39,7 @@ class PilotConfig:
     benchmarks: list[str] = field(default_factory=lambda: list(BENCHMARKS))
     eval_limit: int | None = None
     eval_max_new_tokens: int = 8192
-    eval_batch_size: int = 16
+    eval_batch_size: int | str = "auto"
     eval_extra: list[str] = field(default_factory=list)
     device: str = "cuda"
 
@@ -116,6 +116,10 @@ def eval_runs(cfg: PilotConfig, root: Path) -> list[EvalRun]:
     return runs
 
 
+def eval_batch(value: str) -> int | str:
+    return value if value == "auto" else int(value)
+
+
 def load_plan(root: Path) -> tuple[PilotConfig, list[TrainRun], list[EvalRun]]:
     plan = json.loads((root / "plan.json").read_text())
     cfg = PilotConfig(**plan["config"])
@@ -187,8 +191,7 @@ def cmd_plan(args: argparse.Namespace) -> None:
     }
     plan_file.write_text(json.dumps(plan, indent=2) + "\n")
     lines = ["#!/bin/sh", "set -e", f"# pilot {cfg.name}: run with python -m tools.pilot run"]
-    lines += [shlex.join(own_command(root, "train-one", r.id)) for r in trains]
-    lines += [shlex.join(own_command(root, "eval-one", r.id)) for r in evals]
+    lines += [shlex.join(own_command(root, k, i)) for k, i in ordered_steps(trains, evals)]
     (root / "commands.sh").write_text("\n".join(lines) + "\n")
     print(f"plan: {plan_file}")
     print(f"{len(trains)} training runs, {len(evals)} eval runs, nothing started")
@@ -266,16 +269,31 @@ def other_gpu_processes() -> list[str] | None:
     return [line.strip() for line in out.stdout.splitlines() if line.strip()]
 
 
+def ordered_steps(trains: list[TrainRun], evals: list[EvalRun]) -> list[tuple[str, str]]:
+    steps: list[tuple[str, str]] = []
+    trained: set[str] = set()
+    waiting = list(evals)
+    for r in trains:
+        steps.append(("train-one", r.id))
+        trained.add(r.id)
+        ready = [e for e in waiting if set(e.needs) <= trained]
+        steps += [("eval-one", e.id) for e in ready]
+        waiting = [e for e in waiting if e not in ready]
+    return steps + [("eval-one", e.id) for e in waiting]
+
+
 def pending_steps(
     root: Path, trains: list[TrainRun], evals: list[EvalRun], only: list[str]
 ) -> list[tuple[str, str]]:
     def wanted(run_id: str) -> bool:
         return not only or any(run_id == o or run_id.startswith(f"{o}-") for o in only)
 
-    steps = [("train-one", r.id) for r in trains if wanted(r.id)]
-    steps += [("eval-one", r.id) for r in evals if wanted(r.id)]
     kinds = {"train-one": "train", "eval-one": "eval"}
-    return [(k, i) for k, i in steps if read_status(root, i, kinds[k])["state"] != DONE]
+    return [
+        (k, i)
+        for k, i in ordered_steps(trains, evals)
+        if wanted(i) and read_status(root, i, kinds[k])["state"] != DONE
+    ]
 
 
 def cmd_run(args: argparse.Namespace) -> None:
@@ -426,7 +444,9 @@ def main(argv: list[str] | None = None) -> None:
     plan.add_argument("--benchmarks", nargs="+", choices=BENCHMARKS, default=list(BENCHMARKS))
     plan.add_argument("--eval-limit", type=int)
     plan.add_argument("--eval-max-new-tokens", type=int, default=8192)
-    plan.add_argument("--eval-batch-size", type=int, default=16)
+    plan.add_argument(
+        "--eval-batch-size", type=eval_batch, default="auto", help="N, or auto to fill the GPU"
+    )
     plan.add_argument("--eval-extra", default="", help='evals.run flags: --eval-extra="..."')
     plan.add_argument("--device", default="cuda")
     plan.add_argument("--replace", action="store_true", help="overwrite a plan with this name")
