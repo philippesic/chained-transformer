@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -209,6 +210,13 @@ def test_resume_generates_only_what_is_missing(
     assert bench["perf"]["resumed"] == 1 and bench["n_scored"] == 2
     rows = read_jsonl(path)
     assert rows[0] == first[0] and len(rows) == 2
+    assert bench["perf"]["new_tokens"] == sum(r["new_tokens"] for r in rows)
+    again = _run(
+        data, tmp_path, "--model", str(models["full"]), extra=("--sample", "2", "--resume")
+    )
+    perf = again["benchmarks"]["math500"]["perf"]
+    assert perf["resumed"] == 2 and perf["batch_size"] == bench["perf"]["batch_size"]
+    assert perf["new_tokens"] == bench["perf"]["new_tokens"]
     with pytest.raises(SystemExit, match="different generation settings"):
         _run(
             data,
@@ -219,3 +227,77 @@ def test_resume_generates_only_what_is_missing(
         )
     with pytest.raises(SystemExit, match="different model"):
         _run(data, tmp_path, "--model", str(models["lora"]), extra=("--resume",))
+
+
+def test_resume_refuses_responses_it_cannot_check(
+    tmp_path: Path, data: dict[str, Path], models: dict[str, Path]
+) -> None:
+    model = tmp_path / "model"
+    shutil.copytree(models["full"], model)
+    _run(data, tmp_path / "out", "--model", str(model), extra=("--sample", "1"))
+    weights = next(model.glob("*.safetensors"))
+    raw = bytearray(weights.read_bytes())
+    raw[-8:] = bytes(8)
+    weights.write_bytes(bytes(raw))
+    with pytest.raises(SystemExit, match="retrained since"):
+        _run(data, tmp_path / "out", "--model", str(model), extra=("--resume",))
+    (tmp_path / "out" / "report.json").unlink()
+    with pytest.raises(SystemExit, match="left no report.json"):
+        _run(data, tmp_path / "out", "--model", str(model), extra=("--resume",))
+
+
+def test_score_only_keeps_speed_and_sample_and_reads_a_cut_off_line(
+    tmp_path: Path, data: dict[str, Path], models: dict[str, Path]
+) -> None:
+    first = _run(data, tmp_path, "--model", str(models["full"]), extra=("--sample", "1"))
+    path = tmp_path / "math500" / "responses.jsonl"
+    path.write_text(path.read_text() + '{"task_id": "cut off')
+    again = _run(data, tmp_path, "--score-only")
+    assert again["sample"] == first["sample"]
+    for name in ("math500", "livecodebench"):
+        perf = again["benchmarks"][name]["perf"]
+        assert perf["new_tokens"] == first["benchmarks"][name]["perf"]["new_tokens"]
+        assert again["benchmarks"][name]["n_problems"] == 1
+    path.unlink()
+    with pytest.raises(SystemExit, match="does not exist"):
+        _run(data, tmp_path, "--score-only")
+
+
+def test_no_thinking_responses_are_scored_as_answers(tmp_path: Path, data: dict[str, Path]) -> None:
+    out = tmp_path / "math500"
+    out.mkdir()
+    rows = [
+        {"task_id": "t/1", "text": "So 2+2 is \\boxed{4}.", "new_tokens": 5},
+        {"task_id": "t/2", "text": "It is \\boxed{8}.", "new_tokens": 4},
+    ]
+    full = [{**r, "finished": True, "tokens_by_mode": {}, "switches": 0} for r in rows]
+    (out / "responses.jsonl").write_text("".join(json.dumps(r) + "\n" for r in full))
+
+    def score(thinking: bool) -> dict[str, Any]:
+        report = {"generation": {"enable_thinking": thinking}}
+        (tmp_path / "report.json").write_text(json.dumps(report))
+        main(
+            [
+                "--score-only",
+                "--benchmarks",
+                "math500",
+                "--source",
+                f"math500={data['math']}",
+                "--device",
+                "cpu",
+                "--out",
+                str(tmp_path),
+            ]
+        )
+        result: dict[str, Any] = json.loads((tmp_path / "report.json").read_text())
+        return result["benchmarks"]["math500"]
+
+    off = score(False)
+    assert off["scores"]["accuracy"] == 0.5 and off["modes"]["think_closed_rate"] == 1.0
+    assert off["leakage"]["n_closed"] == 2
+    assert score(True)["scores"]["accuracy"] == 0.0
+
+
+def test_a_bad_sample_size_is_a_usage_error(tmp_path: Path, data: dict[str, Path]) -> None:
+    with pytest.raises(SystemExit, match="not 'math500=ten'"):
+        _run(data, tmp_path, "--oracle", extra=("--sample", "math500=ten"))

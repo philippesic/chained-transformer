@@ -739,7 +739,7 @@ def verdict(run: RunResult, num_tests: int, detail: dict[str, Any]) -> tuple[boo
         return False, detail
     results = list(end.get("results") or [])
     metadata = end.get("metadata") or {}
-    passed = len(results) == num_tests and all(r is True for r in results)
+    passed = num_tests > 0 and len(results) == num_tests and all(r is True for r in results)
     failed = [i for i, r in enumerate(results) if r is not True]
     detail.update(
         tests_passed=sum(1 for r in results if r is True),
