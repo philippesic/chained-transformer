@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 import socket
+import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -12,10 +15,17 @@ import pytest
 import torch
 from transformers import Qwen3ForCausalLM
 
+from chained_transformer.checkpoint import load_checkpoint
 from chained_transformer.modes import Mode
 from chained_transformer.surgery import ModeMLP, Routing
 from serving.export import TOKEN_TEXTS_FILE, export_for_vllm
-from serving.tiny import TINY_PROMPTS, tiny_chained_model, tiny_greedy, tiny_token_texts
+from serving.tiny import (
+    TINY_PROMPTS,
+    tiny_chained_model,
+    tiny_greedy,
+    tiny_pilot_checkpoint,
+    tiny_token_texts,
+)
 
 vllm = pytest.importorskip("vllm")
 
@@ -628,3 +638,69 @@ def test_hand_driven_engine_under_torch_compile(
             assert [engine.done[r] for r in req_ids] == want_tokens
             traces = engine.state.slots.traces()
             assert [traces[r] for r in req_ids] == want_modes
+
+
+FRESH_PROCESS = """
+import sys
+from serving.vllm_plugin import register
+from vllm.engine.arg_utils import EngineArgs
+register()
+for path in sys.argv[1:]:
+    config = EngineArgs(model=path, skip_tokenizer_init=True, dtype="float32").create_model_config()
+    print("RESULT", config.architectures[0], config.hf_config.model_type)
+"""
+
+
+def test_pilot_checkpoints_load_in_a_fresh_vllm_process(tmp_path: Path) -> None:
+    trained = tiny_pilot_checkpoint("full", tmp_path / "trained")
+    built = load_checkpoint(trained, torch.float32)
+    exported = export_for_vllm(built.model, tmp_path / "export", token_texts=tiny_token_texts())
+    root = Path(__file__).resolve().parents[1]
+    env = {**os.environ, "PYTHONPATH": str(root), "VLLM_ENABLE_V1_MULTIPROCESSING": "0"}
+    run = subprocess.run(
+        [sys.executable, "-c", FRESH_PROCESS, str(exported), str(trained)],
+        capture_output=True,
+        text=True,
+        timeout=600,
+        cwd=root,
+        env=env,
+    )
+    assert run.returncode == 0, run.stderr[-3000:]
+    results = [line.split()[1:] for line in run.stdout.splitlines() if line.startswith("RESULT ")]
+    assert results == [
+        ["ChainedQwen3ForCausalLM", "qwen3"],
+        ["ChainedQwen3ForCausalLM", "chained_qwen3"],
+    ]
+
+
+@pytest.mark.parametrize(
+    ("variant", "export"),
+    [("full", True), ("lora", True), ("full", False)],
+    ids=["full-exported", "lora-exported", "full-as-saved"],
+)
+def test_pilot_checkpoints_serve_like_hf(
+    vllm_model: tuple[Any, Any, dict[str, torch.Tensor]],
+    variant: str,
+    export: bool,
+    tmp_path: Path,
+) -> None:
+    from vllm.config import set_current_vllm_config
+
+    trained = tiny_pilot_checkpoint(variant, tmp_path / "trained")
+    built = load_checkpoint(trained, torch.float32)
+    assert built.routing is not None
+    if export:
+        served = export_for_vllm(built.model, tmp_path / "export", token_texts=tiny_token_texts())
+    else:
+        served = trained
+        (served / TOKEN_TEXTS_FILE).write_text(json.dumps(tiny_token_texts()) + "\n")
+    config = make_config(served, enforce_eager=True, impl="select")
+    with torch.no_grad(), set_current_vllm_config(config):
+        model, _ = load_model(config, served)
+        engine = MiniEngine(config, model)
+        req_ids = engine.run(TINY_PROMPTS)
+        want_tokens, want_modes = tiny_greedy(built.model, built.routing, TINY_PROMPTS, NEW_TOKENS)
+    assert [engine.done[r] for r in req_ids] == want_tokens
+    traces = engine.state.slots.traces()
+    assert [traces[r] for r in req_ids] == want_modes
+    assert len({m for row in want_modes for m in row}) == 3

@@ -32,6 +32,7 @@ def args(**changes: Any) -> argparse.Namespace:
         "vllm_python": sys.executable,
         "model": "tiny",
         "base": "Qwen/Qwen3-0.6B",
+        "checkpoint": None,
         "num_prompts": 8,
         "max_tokens": 16,
         "gpu_mem": 0.5,
@@ -125,6 +126,15 @@ def test_plan_filters_steps_and_marks_missing_environments(tmp_path: Path) -> No
     assert all(s.needs is None for s in skipped)
     with pytest.raises(SystemExit, match="unknown step"):
         checklist.plan(args(only=["nope"]), tmp_path, info)
+
+
+def test_plan_passes_a_trained_checkpoint_to_the_vllm_bench(tmp_path: Path) -> None:
+    info = {"vllm_env": {"cuda": True}}
+    plain = checklist.plan(args(only=["vllm-bench"]), tmp_path, info)[0]
+    assert "--checkpoint" not in plain.commands[0]
+    trained = checklist.plan(args(only=["vllm-bench"], checkpoint=tmp_path), tmp_path, info)[0]
+    prepare = trained.commands[0]
+    assert prepare[prepare.index("--checkpoint") + 1] == str(tmp_path)
 
 
 def test_run_step_logs_and_reports(tmp_path: Path) -> None:

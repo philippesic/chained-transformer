@@ -2,6 +2,7 @@ from __future__ import annotations
 
 ARCHITECTURE = "ChainedQwen3ForCausalLM"
 MODEL_STATE_MODULE = "vllm.v1.worker.gpu.model_states.default"
+CHECKPOINT_MODULE = "chained_transformer.checkpoint"
 
 
 def register() -> None:
@@ -17,6 +18,7 @@ def register() -> None:
             f"serving.vllm_plugin was built on vLLM 0.34.0's Model Runner V2, but vLLM "
             f"{vllm.__version__} has no {MODEL_STATE_MODULE}: {exc}"
         ) from exc
+    importlib.import_module(CHECKPOINT_MODULE)
     if ARCHITECTURE not in ModelRegistry.get_supported_archs():
         ModelRegistry.register_model(
             ARCHITECTURE, "serving.vllm_plugin.model:ChainedQwen3ForCausalLM"

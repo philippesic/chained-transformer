@@ -350,8 +350,11 @@ def plan(args: argparse.Namespace, out: Path, info: dict[str, Any]) -> list[Step
                     str(bench_dir),
                     "--model",
                     args.model,
+                    "--base",
+                    args.base,
                     "--num-prompts",
                     str(prompts),
+                    *(["--checkpoint", str(args.checkpoint)] if args.checkpoint else []),
                 ],
                 [
                     *vpy,
@@ -371,7 +374,9 @@ def plan(args: argparse.Namespace, out: Path, info: dict[str, Any]) -> list[Step
             ],
             json_judge(
                 out / "bench_vllm.json",
-                lambda r: bench_vllm_outcome(r, prompts, args.model == "qwen"),
+                lambda r: bench_vllm_outcome(
+                    r, prompts, args.model == "qwen" and args.checkpoint is None
+                ),
             ),
             "an arm failed; its own log lines are in this step's log after its '+ ' command",
             env=venv,
@@ -493,6 +498,7 @@ def main() -> int:
     parser.add_argument("--vllm-python", default="~/venvs/vllm/bin/python")
     parser.add_argument("--model", choices=["qwen", "tiny"], default="qwen")
     parser.add_argument("--base", default="Qwen/Qwen3-0.6B")
+    parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--num-prompts", type=int, default=64)
     parser.add_argument("--max-tokens", type=int, default=256)
     parser.add_argument("--gpu-mem", type=float, default=0.6)

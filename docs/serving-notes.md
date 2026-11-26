@@ -104,6 +104,22 @@ Changes made for that run, all checked on CPU:
   Triton impl on CUDA, and `tests/test_serving_vllm_graphs.py` adds a compiled, CUDA-graph
   engine with the Triton impl checked against Hugging Face at three batch sizes.
 
+## Serving a trained pilot checkpoint
+
+The pilot saves each arm with `chained_transformer.checkpoint.save_trained` as a `chained_qwen3`
+model. `full` checkpoints serve as saved: `register()` imports `chained_transformer.checkpoint`
+so vLLM can read that config, and the weight names already match. `lora` checkpoints need
+`serving.export.export_for_vllm`, which merges each mode's adapters; vLLM refuses them as saved
+with a message saying so. `moe` checkpoints route by a learned router, not by mode, and are not
+served. Exports now write `model_type` `qwen3`: they used to keep `chained_qwen3`, which a fresh
+vLLM process could not read, so every exported pilot checkpoint would have failed to load.
+`tools.bench_vllm prepare --checkpoint PATH` (and the checklist's `--checkpoint`) benchmarks a
+trained arm; its `base` arm is then the checkpoint's `think` mode on its own.
+
+Checked on CPU with tiny `full` and `lora` pilot checkpoints: both, exported, and the `full` one
+as saved, decode token for token and mode for mode like Hugging Face in the hand-driven engine,
+and a fresh process with only `register()` reads both the export and the saved `full` checkpoint.
+
 ## Not verified
 
 - vLLM's own engine driving the plugin: its scheduler, GPU model runner and sampler calling
@@ -118,8 +134,8 @@ Changes made for that run, all checked on CPU:
   The shim was imported directly; it was not installed.
 - Real Qwen3 checkpoints and tokenizer, including tracker texts from a real tokenizer and
   thinking prompts. With `--model qwen` the benches copy the base MLP into every mode
-  (`--perturb` adds noise); no loader for a trained chained checkpoint exists on this branch's
-  base, so no bench reads one.
+  (`--perturb` adds noise) unless `tools.bench_vllm` gets `--checkpoint`; no real trained
+  checkpoint has been served.
 - Every GPU number: `tools.bench_vllm` arms, `tools.bench_mode_mlp` on CUDA with its CUDA graph
   check, `tools.bench_paging` transfer rates and overlap, `tools.bench_serving --model qwen`.
 - Speculative decoding through vLLM. Rollback is covered by rebuild in the slot unit tests only.

@@ -14,6 +14,23 @@ from chained_transformer.modes import Mode, ModeTracker
 ARMS = ("base", "chained", "separate")
 
 
+def trained_model(path: Path) -> Any:
+    import torch
+
+    from chained_transformer.checkpoint import load_checkpoint
+
+    built = load_checkpoint(path, dtype=torch.float32)
+    if built.routing is None:
+        raise SystemExit(f"{path} is a plain Qwen3 model, not a mode checkpoint")
+    variant = built.model.config.mode_surgery["variant"]
+    if variant not in ("full", "lora"):
+        raise SystemExit(
+            f"{path} is a {variant!r} checkpoint; vLLM serving covers per-mode MLPs "
+            "(full and lora), and the moe arm routes by a learned router instead"
+        )
+    return built.model.eval()
+
+
 def prepare(args: argparse.Namespace) -> None:
     import torch
 
@@ -25,7 +42,7 @@ def prepare(args: argparse.Namespace) -> None:
     if args.model == "tiny":
         from serving.tiny import TINY_PROMPTS, tiny_chained_model, tiny_token_texts
 
-        model, _ = tiny_chained_model()
+        model = trained_model(args.checkpoint) if args.checkpoint else tiny_chained_model()[0]
         export_for_vllm(model, out / "chained", token_texts=tiny_token_texts(), dtype=dtype)
         prompts = [TINY_PROMPTS[i % len(TINY_PROMPTS)] for i in range(args.num_prompts)]
         texts = tiny_token_texts()
@@ -34,9 +51,14 @@ def prepare(args: argparse.Namespace) -> None:
         from chained_transformer.model import load_base, load_tokenizer
         from tools.bench_serving import QWEN_PROMPTS
 
-        tok = load_tokenizer(args.base)
-        model = load_base(args.base, dtype=torch.float32, device="cpu").eval()
-        apply_surgery(model, SurgeryConfig(variant="full"))
+        if args.checkpoint is not None:
+            model = trained_model(args.checkpoint)
+            has_tokenizer = (args.checkpoint / "tokenizer_config.json").exists()
+            tok = load_tokenizer(str(args.checkpoint) if has_tokenizer else args.base)
+        else:
+            tok = load_tokenizer(args.base)
+            model = load_base(args.base, dtype=torch.float32, device="cpu").eval()
+            apply_surgery(model, SurgeryConfig(variant="full"))
         if args.perturb > 0:
             g = torch.Generator().manual_seed(0)
             with torch.no_grad():
@@ -63,7 +85,15 @@ def prepare(args: argparse.Namespace) -> None:
     (out / "prompts.json").write_text(json.dumps(prompts) + "\n")
     (out / "texts.json").write_text(json.dumps(texts) + "\n")
     (out / "meta.json").write_text(
-        json.dumps({"model": args.model, "base": args.base, "dtype": args.dtype}) + "\n"
+        json.dumps(
+            {
+                "model": args.model,
+                "base": args.base,
+                "checkpoint": None if args.checkpoint is None else str(args.checkpoint),
+                "dtype": args.dtype,
+            }
+        )
+        + "\n"
     )
     print(f"prepared {out}")
 
@@ -250,6 +280,7 @@ def main() -> None:
     parser.add_argument("--dtype", default="float16")
     parser.add_argument("--num-prompts", type=int, default=64)
     parser.add_argument("--perturb", type=float, default=0.0)
+    parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--arm", choices=ARMS, default="base")
     parser.add_argument("--impl", default="select")
     parser.add_argument("--impls", nargs="+", default=["select", "triton"])
@@ -261,6 +292,8 @@ def main() -> None:
     parser.add_argument("--json-out", type=Path)
     parser.add_argument("--out", type=Path)
     args = parser.parse_args()
+    if args.checkpoint is not None and args.perturb > 0:
+        parser.error("--perturb adds noise to copies of the base MLP; a --checkpoint has its own")
     if args.command == "prepare":
         prepare(args)
     elif args.command == "arm":

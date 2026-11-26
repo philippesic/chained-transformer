@@ -10,12 +10,13 @@ import torch
 from safetensors.torch import save_file
 from transformers import PretrainedConfig, Qwen3ForCausalLM
 
-from chained_transformer.modes import Mode
+from chained_transformer.modes import MODE_NAMES, Mode
 from serving.mixed import stack_any
 
 ARCHITECTURE = "ChainedQwen3ForCausalLM"
 TOKEN_TEXTS_FILE = "token_texts.json"
 MLP_IMPLS = ("select", "loop", "triton")
+QWEN3_MODEL_TYPE = "qwen3"
 
 
 @dataclass(frozen=True)
@@ -36,12 +37,14 @@ def tracking_settings(config: PretrainedConfig) -> TrackingSettings:
             f"vLLM serves full per-mode MLPs; export the {variant!r} checkpoint with "
             "serving.export.export_for_vllm first"
         )
+    switch = getattr(config, "mode_switch", None) or {}
+    default_prompt = Mode(MODE_NAMES.index(switch.get("prompt_mode", MODE_NAMES[Mode.THINK])))
     impl = tracking.get("mlp_impl", "select")
     if impl not in MLP_IMPLS:
         raise ValueError(f"mode_tracking.mlp_impl must be one of {MLP_IMPLS}, got {impl!r}")
     return TrackingSettings(
         num_modes=int(surgery.get("num_modes", len(Mode))),
-        prompt_mode=Mode(int(tracking.get("prompt_mode", Mode.THINK))),
+        prompt_mode=Mode(int(tracking.get("prompt_mode", default_prompt))),
         token_texts_file=tracking.get("token_texts_file"),
         mlp_impl=impl,
         record=bool(tracking.get("record", False)),
@@ -71,6 +74,7 @@ def export_config(
     mlp_impl: str,
 ) -> dict[str, Any]:
     cfg = model.config.to_dict()
+    cfg["model_type"] = QWEN3_MODEL_TYPE
     cfg["architectures"] = [ARCHITECTURE]
     surgery = dict(cfg.get("mode_surgery") or {})
     surgery["variant"] = "full"
@@ -134,6 +138,7 @@ def export_single_mode(
         state = {k: v.to(dtype) for k, v in state.items()}
     save_file(state, str(out_dir / "model.safetensors"), metadata={"format": "pt"})
     cfg = model.config.to_dict()
+    cfg["model_type"] = QWEN3_MODEL_TYPE
     cfg["architectures"] = ["Qwen3ForCausalLM"]
     cfg.pop("mode_surgery", None)
     cfg.pop("mode_tracking", None)
