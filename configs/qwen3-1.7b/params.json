@@ -1,0 +1,28 @@
+{
+  "base_model": "Qwen/Qwen3-1.7B",
+  "base": {
+    "total": 1720574976,
+    "mlp": 1056964608,
+    "trainable_per_mode": 0
+  },
+  "variants": {
+    "full": {
+      "total": 3834504192,
+      "mlp": 3170893824,
+      "trainable_per_mode": 1056964608,
+      "bf16_weights_gib": 7.142
+    },
+    "lora": {
+      "total": 1852695552,
+      "mlp": 1189085184,
+      "trainable_per_mode": 44040192,
+      "bf16_weights_gib": 3.451
+    },
+    "moe": {
+      "total": 3834676224,
+      "mlp": 3171065856,
+      "trainable_per_mode": 0,
+      "bf16_weights_gib": 7.143
+    }
+  }
+}

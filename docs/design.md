@@ -65,6 +65,64 @@ wrongly shaped `mode_ids` raises an error naming the repair.
 `freeze_all_but_mode(model, m)` leaves only mode `m`'s MLP (or its LoRA tensors) trainable,
 for single-mode retraining.
 
+## Checkpoints (`chained_transformer/checkpoint.py`)
+
+A mode checkpoint is a normal Hugging Face directory (`config.json`, `model.safetensors`,
+`generation_config.json`, tokenizer files) whose config has `model_type: chained_qwen3`.
+`ChainedQwen3Config` extends `Qwen3Config` with `mode_surgery` (the `SurgeryConfig`),
+`mode_names`, `mode_switch` (the tracker's switch strings, fence rule, prompt mode and a
+tracker version) and `base_model`. `ChainedQwen3ForCausalLM` is a `Qwen3ForCausalLM` that
+applies the surgery in its constructor and exposes `model.routing`. Importing the module
+registers both with `AutoConfig` and `AutoModelForCausalLM`, so `save_pretrained` and
+`from_pretrained` handle safetensors, tied embeddings and dtype. `load_checkpoint` returns a
+`Built` for chained and plain Qwen3 directories alike (plain ones have no routing).
+
+`convert(base, surgery)` applies the surgery to a loaded base model, builds the chained model on
+the meta device and assigns the weights, so every mode starts as an exact copy of the base MLP,
+LoRA B is zero and the MoE router is freshly initialised from `seed`. Non-persistent buffers
+(rotary frequencies) are copied from the base and the LM head is re-tied.
+
+On CPU in fp32, a fresh conversion reproduces the base logits bitwise for `full` and `lora` when
+all tokens share a mode; mixed-mode batches differ by about 4e-6 (row-gathered matmuls), and
+`moe` by about 3e-6 (weighted sum of identical experts). `tools/conversion_check.py` measures this
+for prefill, cached decoding across switches and a save/load round trip.
+
+`QWEN3_SHAPES` records the Qwen3-0.6B and 1.7B shapes so configs and parameter counts can be
+planned without downloading weights (`python -m chained_transformer.checkpoint plan`); a test
+checks the 0.6B shape against the published counts; the generated configs and counts are in
+`configs/qwen3-0.6b/` and `configs/qwen3-1.7b/`. `mode_slice(model, m)` returns one mode's
+tensors, for single-mode upgrades.
+
+## Single-mode upgrades (`chained_transformer/upgrade.py`)
+
+A mode pack is one mode's tensors (`mode.safetensors`) plus `mode.json`: the mode, the variant,
+the parameter count and a trunk fingerprint, a SHA-256 over every parameter that belongs to no
+mode. `retrain_mode` freezes everything except one mode (`full` copies or `lora` adapters; `moe`
+has no per-mode parameters) and trains it on rows in the dataset format, with loss on that
+mode's tokens only (`loss_on="mode"`, the default) or on every token. `swap_mode` copies a pack
+into a model after checking variant, mode, trunk fingerprint, tensor names and shapes, so a
+pack trained on one trunk cannot be dropped silently into another.
+
+`measure` reports per-label loss and token accuracy and, given a reference model, the KL from
+it and the largest log-probability change. Each label is split at the first code position:
+before it the code MLP has not run, so a code upgrade must leave those positions bit-identical,
+and the split shows whether anything leaks. After it, `think` and `answer` can still move,
+because later layers attend to hidden states the new code MLP produced; that drift is what an
+upgrade has to keep small.
+
+On a GPU host, with a trained checkpoint and a dataset slice:
+
+```sh
+python -m chained_transformer.upgrade retrain --checkpoint CKPT --data DATA --mode code --steps 200 --out PACK
+python -m chained_transformer.upgrade swap --checkpoint CKPT --pack PACK --out CKPT-upgraded
+python -m chained_transformer.upgrade measure --checkpoint CKPT-upgraded --reference CKPT --data DATA --limit 200 --out measure.json
+```
+
+`retrain` uses the same 8-bit AdamW with bf16 stochastic rounding as training when it runs in
+bf16 on CUDA, and writes `train.jsonl` next to the pack. Then run `evals.run` on the upgraded
+checkpoint. `tools/upgrade_demo.py` runs the whole idea on a tiny synthetic task on CPU; see
+[results/upgrade-demo](../results/upgrade-demo/result.md).
+
 ## Generation (`chained_transformer/generate.py`)
 
 `mode_tracking(model, routing, texts)` registers a forward pre-hook. On prefill it starts one
@@ -144,18 +202,20 @@ build data with a policy whose `max_tokens` matches `--seq-len` to avoid that. O
 micro-batch.
 Checkpoint saving is not implemented yet.
 
-## Evals (`chained_transformer/evals.py`)
+## Evals (`evals/`)
 
-Stubs, not full runs. Generation goes through `generate_responses`, which uses the mode hook
-when a routing object is given and records tokens per mode, tokens/s and peak memory.
-
-- MATH500 (`HuggingFaceH4/MATH-500`): scored with `math-verify` on the answer segment only.
-- HumanEval+: the last code block after thinking becomes an `evalplus` sample, then
-  `evalplus.evaluate` runs it.
-- LiveCodeBench: not wired. Its scorer, `lcb_runner`, is not on PyPI; it needs a pinned commit.
-- Think-word leakage: matches of "wait", "hmm", "let me", "alternatively", "actually",
-  "double-check" and "I think" per 1,000 words in the answer segment.
+`python -m evals.run` loads a mode checkpoint, a plain checkpoint, a Hub name or (for `separate`)
+three plain fine-tunes, generates through the mode hook or the separate-models loop, and scores
+MATH500 (math-verify on the answer segment), HumanEval+ (evalplus) and LiveCodeBench (a
+re-implementation of `lcb_runner`'s grading in a subprocess sandbox, `release_v5`, contest dates
+2024-10-01 to 2025-02-01). Every response is split into think, code and answer text by the same
+`ModeTracker`, which also drives the thinking-leakage metrics. Each run writes `report.json`
+(model, generation settings, git commit, data sources with hashes, scores, leakage, tokens by
+segment label, switches, tokens/s, peak memory) and per-benchmark `responses.jsonl` and
+`scores.jsonl`; `--score-only` rescores saved responses and `--oracle` scores reference answers
+to check a scorer. Details, checks and known deviations from the official harnesses are in
+[evals/NOTES.md](../evals/NOTES.md). `chained_transformer/evals.py` is the older stub and can be
+deleted.
 
 These use our own generation and scorers rather than lm-eval-harness, because every arm must
-generate through the mode hook (or the separate-models loop) and the scorers above are the ones
-reasoning-model evaluations normally use.
+generate through the mode hook (or the separate-models loop).
