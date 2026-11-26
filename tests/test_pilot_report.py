@@ -56,6 +56,9 @@ def _train(root: Path, run_id: str, arm: str, peak: float) -> None:
         else chained_config(BASE, SurgeryConfig(cast(Variant, arm)))
     )
     config.save_pretrained(str(out / "checkpoint"))
+    _, trains, _ = pilot.load_plan(root)
+    argv = next(r.argv for r in trains if r.id == run_id)
+    pilot.write_status(root, run_id, "train", state=pilot.DONE, argv=argv)
 
 
 def _bench(
@@ -90,6 +93,9 @@ def _report(root: Path, run_id: str, math: float, code: float, batch: int = 8) -
             b["modes"]["mean_reprefilled_tokens"] = 250.0
     report = {"smoke": False, "environment": {"device": "cuda"}, "benchmarks": benches}
     (out / "report.json").write_text(json.dumps(report))
+    _, _, evals = pilot.load_plan(root)
+    argv = next(e.argv for e in evals if e.id == run_id)
+    pilot.write_status(root, run_id, "eval", state=pilot.DONE, argv=argv)
     rows = [
         ("a", [[0, 5], [1, 3], [0, 2], [2, 4]], True),
         ("b", [[0, 9]], False),
@@ -169,7 +175,7 @@ def test_missing_report_makes_the_verdict_incomplete(tmp_path: Path) -> None:
     root = _pilot(tmp_path, (0.45, 0.45), (0.45, 0.45), skip="moe-s1")
     data, text = pilot_report.build(root, 0)
     assert data["kill_rule"].startswith("incomplete")
-    assert data["lora"] is None
+    assert data["lora"].startswith("lora is within")
     assert "- No eval report yet for: moe-s1." in text
     assert "| moe | 41.0 (41.0 / n/a) |" in text
 
@@ -234,3 +240,41 @@ def test_cli_writes_markdown_and_json(tmp_path: Path, capsys: pytest.CaptureFixt
     assert out == (root / "results.md").read_text()
     assert json.loads((root / "results.json").read_text())["pilot"] == "p"
     assert "## Table 1, main results" in out and "## Table 5, serving" in out
+
+
+def test_failed_eval_is_shown_but_not_counted(tmp_path: Path) -> None:
+    root = _pilot(tmp_path, (0.45, 0.45), (0.45, 0.45))
+    pilot.mark_failed(root, "full-s1", "eval", 1)
+    data, text = pilot_report.build(root, 0)
+    assert data["kill_rule"].startswith("incomplete")
+    assert data["not_counted"] == {"full-s1": "eval failed"}
+    assert "Not counted in the verdict, though Table 1 shows their reports: full-s1" in text
+    assert data["per_run"]["full"]["1"]["mean"] == pytest.approx(45.0)
+
+
+def test_mean_needs_every_planned_benchmark_and_ignores_others(tmp_path: Path) -> None:
+    root = _pilot(tmp_path, (0.45, 0.45), (0.45, 0.45))
+    path = root / "full-s0" / "eval" / "report.json"
+    report = json.loads(path.read_text())
+    report["benchmarks"]["livecodebench"] = _bench(0.99, None, 10, 1.0, 1.0, 1.0)
+    path.write_text(json.dumps(report))
+    assert pilot_report.build(root, 0)[0]["per_run"]["full"]["0"]["mean"] == pytest.approx(45.0)
+    del report["benchmarks"]["humanevalplus"]
+    path.write_text(json.dumps(report))
+    data, _ = pilot_report.build(root, 0)
+    assert data["per_run"]["full"]["0"]["mean"] is None
+    assert data["kill_rule"].startswith("incomplete")
+
+
+def test_report_reads_a_cut_off_response_line_and_skips_empty_perf(tmp_path: Path) -> None:
+    root = _pilot(tmp_path, (0.45, 0.45), (0.45, 0.45))
+    responses = root / "full-s0" / "eval" / "math500" / "responses.jsonl"
+    responses.write_text(responses.read_text() + '{"task_id": "d", "mode_ru')
+    path = root / "full-s1" / "eval" / "report.json"
+    report = json.loads(path.read_text())
+    report["benchmarks"]["math500"]["perf"] = {"batch_size": 1, "new_tokens": 0, "seconds": 0.0}
+    path.write_text(json.dumps(report))
+    data, _ = pilot_report.build(root, 0)
+    assert data["switching"]["full"]["responses"] == 6
+    assert data["per_run"]["full"]["1"]["batch_size"] == 8.0
+    assert data["per_run"]["full"]["1"]["tokens_per_s"] == pytest.approx(3000 / 20)

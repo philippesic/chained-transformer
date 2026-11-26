@@ -122,7 +122,13 @@ def _mean(values: Sequence[int]) -> float | None:
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    rows = []
+    for line in path.read_text().splitlines():
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows
 
 
 def from_eval_dir(path: Path) -> dict[str, dict[str, Any]]:

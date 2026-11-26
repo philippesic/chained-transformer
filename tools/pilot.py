@@ -7,7 +7,7 @@ import shlex
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -21,6 +21,23 @@ LR = {"sft": 1e-5, "full": 1e-5, "lora": 1e-4, "moe": 1e-5, "separate": 1e-5}
 KILL_MARGIN_POINTS = 2.0
 LORA_TIE_POINTS = 1.0
 DONE = "done"
+PLAN_OWNS = frozenset(
+    [
+        "--data",
+        "--base",
+        "--device",
+        "--steps",
+        "--seq-len",
+        "--grad-accum",
+        "--warmup",
+        "--arm",
+        "--out",
+        "--seed",
+        "--mode",
+        "--lora-rank",
+        "--moe-top-k",
+    ]
+)
 
 
 @dataclass
@@ -146,11 +163,45 @@ def read_status(root: Path, run_id: str, kind: str) -> dict[str, Any]:
     return json.loads(path.read_text()) if path.exists() else {"state": "pending"}
 
 
-def write_status(root: Path, run_id: str, kind: str, **fields: Any) -> None:
-    path = status_path(root, run_id, kind)
+def write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    tmp.replace(path)
+
+
+def write_status(root: Path, run_id: str, kind: str, **fields: Any) -> None:
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    path.write_text(json.dumps({**fields, "updated": now}, indent=2) + "\n")
+    write_json(status_path(root, run_id, kind), {**fields, "updated": now})
+
+
+def mark_failed(root: Path, run_id: str, kind: str, code: int) -> None:
+    old = {k: v for k, v in read_status(root, run_id, kind).items() if k != "updated"}
+    write_status(root, run_id, kind, **{**old, "state": "failed", "returncode": code})
+
+
+def train_current(root: Path, run_id: str, argv: list[str] | None) -> bool:
+    status = read_status(root, run_id, "train")
+    return bool(status["state"] == DONE and status.get("argv") == argv)
+
+
+def trained_stamp(root: Path, needs: list[str]) -> dict[str, str | None]:
+    return {n: read_status(root, n, "train").get("updated") for n in needs}
+
+
+def eval_problem(root: Path, run: EvalRun, train_argv: Mapping[str, list[str]]) -> str | None:
+    status = read_status(root, run.id, "eval")
+    if status["state"] != DONE:
+        return f"eval {status['state']}"
+    if status.get("argv") != run.argv:
+        return "evaluated under an earlier plan (sample or flags changed)"
+    stale = [n for n in run.needs if not train_current(root, n, train_argv.get(n))]
+    if stale:
+        return f"{', '.join(stale)} not trained for the current plan"
+    recorded = status.get("trained")
+    if recorded is not None and recorded != trained_stamp(root, run.needs):
+        return "retrained after this eval"
+    return None
 
 
 def git_head() -> str | None:
@@ -183,7 +234,7 @@ def write_plan(root: Path, cfg: PilotConfig, **extra: Any) -> tuple[list[TrainRu
     if "git_head" not in plan:
         plan["git_head"] = git_head()
     root.mkdir(parents=True, exist_ok=True)
-    plan_file.write_text(json.dumps(plan, indent=2) + "\n")
+    write_json(plan_file, plan)
     lines = ["#!/bin/sh", "set -e", f"# pilot {cfg.name}: run with python -m tools.pilot run"]
     lines += [shlex.join(own_command(root, k, i)) for k, i in ordered_steps(trains, evals)]
     (root / "commands.sh").write_text("\n".join(lines) + "\n")
@@ -197,8 +248,22 @@ def first_sample(benchmarks: list[str]) -> dict[str, int]:
     return required_sizes(dict.fromkeys(available, ASSUMED_DISCORDANCE), available)
 
 
+def plan_owned(extra: list[str]) -> list[str]:
+    return [t for t in extra if t.split("=")[0] in PLAN_OWNS]
+
+
+def comparable(cfg: PilotConfig) -> dict[str, Any]:
+    return {k: v for k, v in asdict(cfg).items() if k not in ("eval_set", "eval_sample")}
+
+
 def cmd_plan(args: argparse.Namespace) -> None:
     root: Path = args.root / args.name
+    owned = plan_owned(shlex.split(args.train_extra))
+    if owned:
+        raise SystemExit(
+            f"--train-extra sets {owned}, which the plan sets itself; use plan's own flags "
+            "(--lora-rank, --moe-top-k, --steps, ...) so the saved checkpoints match"
+        )
     cfg = PilotConfig(
         name=args.name,
         data=str(args.data),
@@ -209,6 +274,8 @@ def cmd_plan(args: argparse.Namespace) -> None:
         grad_accum=args.grad_accum,
         warmup=args.warmup,
         complete_only=not args.all_rows,
+        lora_rank=args.lora_rank,
+        moe_top_k=args.moe_top_k,
         train_extra=shlex.split(args.train_extra),
         benchmarks=args.benchmarks,
         eval_limit=args.eval_limit,
@@ -221,9 +288,16 @@ def cmd_plan(args: argparse.Namespace) -> None:
     )
     plan_file = root / "plan.json"
     if plan_file.exists():
-        old = json.loads(plan_file.read_text())["config"]
-        if old != asdict(cfg) and not args.replace:
+        old = PilotConfig(**json.loads(plan_file.read_text())["config"])
+        if not args.replace and comparable(old) != comparable(cfg):
             raise SystemExit(f"{plan_file} exists with a different config; pick a new --name")
+        if not args.replace and asdict(old) != asdict(cfg):
+            print(f"plan: {plan_file} already exists; its eval set has grown since, kept as is")
+            return
+        if old.eval_sample and cfg.eval_sample and old.benchmarks == cfg.benchmarks:
+            cfg.eval_sample = {
+                b: max(n, old.eval_sample.get(b, n)) for b, n in cfg.eval_sample.items()
+            }
     trains, evals = write_plan(root, cfg)
     print(f"plan: {plan_file}")
     print(f"{len(trains)} training runs, {len(evals)} eval runs, nothing started")
@@ -285,12 +359,22 @@ def cmd_eval_one(args: argparse.Namespace) -> None:
     run = next((r for r in evals if r.id == args.run), None)
     if run is None:
         raise SystemExit(f"no eval run {args.run} in the plan")
-    missing = [n for n in run.needs if read_status(args.root, n, "train")["state"] != DONE]
+    train_argv = {r.id: r.argv for r in trains}
+    missing = [n for n in run.needs if not train_current(args.root, n, train_argv.get(n))]
     if missing:
-        raise SystemExit(f"{run.id} needs trained checkpoints first: {missing}")
-    write_status(args.root, run.id, "eval", state="evaluating", argv=run.argv)
+        raise SystemExit(
+            f"{run.id} needs trained checkpoints for the current plan first: {missing}"
+        )
+    stamp = trained_stamp(args.root, run.needs)
+    before = read_status(args.root, run.id, "eval").get("trained")
+    out = args.root / run.id / "eval"
+    if before is not None and before != stamp and out.exists():
+        aside = out.with_name(f"eval-before-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}")
+        out.rename(aside)
+        print(f"{run.id} was retrained, so its earlier eval moved to {aside} and starts over")
+    write_status(args.root, run.id, "eval", state="evaluating", argv=run.argv, trained=stamp)
     eval_main(run.argv)
-    write_status(args.root, run.id, "eval", state=DONE, argv=run.argv)
+    write_status(args.root, run.id, "eval", state=DONE, argv=run.argv, trained=stamp)
 
 
 def other_gpu_processes() -> list[str] | None:
@@ -322,23 +406,21 @@ def step_argv(trains: list[TrainRun], evals: list[EvalRun]) -> dict[tuple[str, s
     return steps | {("eval-one", e.id): e.argv for e in evals}
 
 
-def step_done(root: Path, kind: str, run_id: str, argv: list[str]) -> bool:
-    status = read_status(root, run_id, "train" if kind == "train-one" else "eval")
-    return bool(status["state"] == DONE and status.get("argv") == argv)
-
-
 def pending_steps(
     root: Path, trains: list[TrainRun], evals: list[EvalRun], only: list[str]
 ) -> list[tuple[str, str]]:
     def wanted(run_id: str) -> bool:
         return not only or any(run_id == o or run_id.startswith(f"{o}-") for o in only)
 
-    argv = step_argv(trains, evals)
-    return [
-        (k, i)
-        for k, i in ordered_steps(trains, evals)
-        if wanted(i) and not step_done(root, k, i, argv[(k, i)])
-    ]
+    train_argv = {r.id: r.argv for r in trains}
+    by_id = {e.id: e for e in evals}
+
+    def done(kind: str, run_id: str) -> bool:
+        if kind == "train-one":
+            return train_current(root, run_id, train_argv[run_id])
+        return eval_problem(root, by_id[run_id], train_argv) is None
+
+    return [(k, i) for k, i in ordered_steps(trains, evals) if wanted(i) and not done(k, i)]
 
 
 def scores_of(root: Path, run_id: str, bench: str) -> dict[str, bool]:
@@ -399,6 +481,7 @@ def sizing(root: Path, cfg: PilotConfig) -> dict[str, Any]:
         "current": current,
         "needed": needed,
         "grown": grown,
+        "seed_se_current": round(seed_se(disc, current), 4),
         "power_at_current": round(power_at(seed_se(disc, current)), 3),
         "power_at_grown": round(power_at(seed_se(disc, grown)), 3),
         "power_full_suite": round(power_at(seed_se(disc, available)), 3),
@@ -455,8 +538,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                 own_command(args.root, kind, run_id), stdout=log, stderr=subprocess.STDOUT
             ).returncode
         if code != 0:
-            status_kind = "train" if kind == "train-one" else "eval"
-            write_status(args.root, run_id, status_kind, state="failed", returncode=code)
+            mark_failed(args.root, run_id, "train" if kind == "train-one" else "eval", code)
             print(f"{kind} {run_id} failed with exit code {code}; see {log_path}")
             if not args.keep_going:
                 raise SystemExit(code)
@@ -493,8 +575,12 @@ def cmd_widen(args: argparse.Namespace) -> None:
 def last_json_line(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
-    lines = path.read_text().strip().splitlines()
-    return json.loads(lines[-1]) if lines else None
+    for line in reversed(path.read_text().splitlines()):
+        try:
+            return cast("dict[str, Any]", json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return None
 
 
 def cmd_status(args: argparse.Namespace) -> None:
@@ -511,52 +597,55 @@ def cmd_status(args: argparse.Namespace) -> None:
     print()
     if cfg.eval_sample and cfg.eval_set == "verdict":
         print("verdict eval set: " + ", ".join(f"{b} {n}" for b, n in cfg.eval_sample.items()))
+    train_argv = {r.id: r.argv for r in trains}
     for e in evals:
-        status = read_status(args.root, e.id, "eval")
-        state = status["state"]
-        if state == DONE and status.get("argv") != e.argv:
-            state = "done, resumes for the current plan"
-        print(f"{e.id:<22} eval {state}")
+        state = read_status(args.root, e.id, "eval")["state"]
+        why = eval_problem(args.root, e, train_argv) if state == DONE else None
+        print(f"{e.id:<22} eval {state}" + (f", runs again: {why}" if why else ""))
 
 
-def eval_scores(root: Path, run_id: str) -> dict[str, float] | None:
+def eval_scores(root: Path, run_id: str, benchmarks: list[str]) -> dict[str, float] | None:
     report = root / run_id / "eval" / "report.json"
     if not report.exists():
         return None
     benches = json.loads(report.read_text()).get("benchmarks", {})
     scores = {
-        name: 100.0 * float(b["scores"]["accuracy"])
-        for name, b in benches.items()
-        if b.get("scores", {}).get("accuracy") is not None
+        name: 100.0 * float(benches[name]["scores"]["accuracy"])
+        for name in benchmarks
+        if benches.get(name, {}).get("scores", {}).get("accuracy") is not None
     }
     return scores or None
 
 
-def verdict(table: dict[str, dict[int, dict[str, float]]], seeds: list[int]) -> dict[str, Any]:
+def at_least(value: float, line: float) -> bool:
+    return round(value, 6) >= line
+
+
+def verdict(
+    table: dict[str, dict[int, dict[str, float]]], seeds: list[int], benchmarks: list[str]
+) -> dict[str, Any]:
     def primary(arm: str, seed: int) -> float | None:
-        scores = table.get(arm, {}).get(seed)
-        return sum(scores.values()) / len(scores) if scores else None
+        scores = table.get(arm, {}).get(seed) or {}
+        if not benchmarks or any(b not in scores for b in benchmarks):
+            return None
+        return sum(scores[b] for b in benchmarks) / len(benchmarks)
 
     margins: dict[str, dict[str, float | None]] = {}
     beats: list[bool] = []
     ties: list[bool] = []
     for seed in seeds:
         full, sft, moe, lora = (primary(a, seed) for a in ("full", "sft", "moe", "lora"))
-        if full is None or sft is None or moe is None:
-            margins[str(seed)] = {"full_minus_sft": None, "full_minus_moe": None}
-            continue
-        beats.append(min(full - sft, full - moe) >= KILL_MARGIN_POINTS)
-        m: dict[str, float | None] = {
-            "full_minus_sft": round(full - sft, 2),
-            "full_minus_moe": round(full - moe, 2),
-        }
-        if lora is not None:
+        m: dict[str, float | None] = {"full_minus_sft": None, "full_minus_moe": None}
+        if full is not None and sft is not None and moe is not None:
+            beats.append(at_least(min(full - sft, full - moe), KILL_MARGIN_POINTS))
+            m = {"full_minus_sft": round(full - sft, 2), "full_minus_moe": round(full - moe, 2)}
+        if full is not None and lora is not None:
             m["lora_minus_full"] = round(lora - full, 2)
-            ties.append(abs(lora - full) <= LORA_TIE_POINTS)
+            ties.append(at_least(LORA_TIE_POINTS, abs(lora - full)))
         margins[str(seed)] = m
     complete = len(beats) == len(seeds)
     if not complete:
-        kill = "incomplete: some arms have no eval report yet"
+        kill = "incomplete: some arms have no current eval of every benchmark yet"
     elif all(beats):
         kill = f"full beats sft and moe by at least {KILL_MARGIN_POINTS} points on every seed"
     elif not any(beats):
@@ -564,45 +653,71 @@ def verdict(table: dict[str, dict[int, dict[str, float]]], seeds: list[int]) -> 
     else:
         kill = "mixed: full clears the margin on some seeds only"
     lora_note = None
-    if complete and len(ties) == len(seeds):
+    if len(ties) == len(seeds):
         lora_note = (
             f"lora is within {LORA_TIE_POINTS} point of full on every seed"
             if all(ties)
             else "lora does not tie full on every seed"
         )
     return {
-        "primary": "mean accuracy over the benchmarks run, in points",
+        "primary": f"mean accuracy over {', '.join(benchmarks)}, in points",
         "margins": margins,
         "kill_rule": kill,
         "lora": lora_note,
     }
 
 
-def score_table(root: Path, evals: list[EvalRun]) -> dict[str, dict[int, dict[str, float]]]:
+def uncounted(root: Path, trains: list[TrainRun], evals: list[EvalRun]) -> dict[str, str]:
+    train_argv = {r.id: r.argv for r in trains}
+    out = {}
+    for e in evals:
+        if (root / e.id / "eval" / "report.json").exists():
+            why = eval_problem(root, e, train_argv)
+            if why:
+                out[e.id] = why
+    return out
+
+
+def score_table(
+    root: Path, trains: list[TrainRun], evals: list[EvalRun], benchmarks: list[str]
+) -> dict[str, dict[int, dict[str, float]]]:
+    skip = uncounted(root, trains, evals)
     table: dict[str, dict[int, dict[str, float]]] = {}
     for e in evals:
-        scores = eval_scores(root, e.id)
+        scores = None if e.id in skip else eval_scores(root, e.id, benchmarks)
         if scores is not None:
             table.setdefault(e.arm, {})[e.seed] = scores
     return table
 
 
 def cmd_compare(args: argparse.Namespace) -> None:
-    cfg, _, evals = load_plan(args.root)
-    table = score_table(args.root, evals)
+    from tools.eval_power import kill_rule_odds
+
+    cfg, trains, evals = load_plan(args.root)
+    table = score_table(args.root, trains, evals, cfg.benchmarks)
     result = {
         "pilot": cfg.name,
         "eval_set": cfg.eval_set,
         "scores_points": {a: {str(s): v for s, v in by.items()} for a, by in table.items()},
-        **verdict(table, cfg.seeds),
+        **verdict(table, cfg.seeds, cfg.benchmarks),
+        "not_counted": uncounted(args.root, trains, evals),
     }
     if cfg.eval_set == "verdict":
         sized = sizing(args.root, cfg)
+        odds = {
+            str(g): {
+                k: round(v, 2)
+                for k, v in kill_rule_odds(g, sized["seed_se_current"], len(cfg.seeds)).items()
+            }
+            for g in (2, 3, 4)
+        }
         result["verdict_sample"] = {
             "problems": sized["current"],
             "discordance": sized["discordance"],
             "observed": bool(sized["observed"]),
+            "per_seed_se": round(sized["seed_se_current"], 2),
             "power_for_a_2_point_gap": sized["power_at_current"],
+            "verdict_odds_by_true_gap": odds,
         }
     text = json.dumps(result, indent=2) + "\n"
     (args.root / "compare.json").write_text(text)
@@ -624,6 +739,8 @@ def main(argv: list[str] | None = None) -> None:
     plan.add_argument("--grad-accum", type=int, default=8)
     plan.add_argument("--warmup", type=int, default=50)
     plan.add_argument("--all-rows", action="store_true", help="train on incomplete rows too")
+    plan.add_argument("--lora-rank", type=int, default=64)
+    plan.add_argument("--moe-top-k", type=int, default=2)
     plan.add_argument("--train-extra", default="", help='train.py flags: --train-extra="..."')
     plan.add_argument("--benchmarks", nargs="+", choices=BENCHMARKS, default=list(BENCHMARKS))
     plan.add_argument("--eval-limit", type=int)

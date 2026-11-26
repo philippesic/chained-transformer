@@ -12,6 +12,7 @@ POWER = 0.8
 SEEDS = 2
 ASSUMED_DISCORDANCE = 0.10
 MIN_SAMPLE = 100
+MARGIN_CORRELATION = 0.5
 
 
 def target_seed_se(
@@ -27,8 +28,41 @@ def seed_se(discordance: Mapping[str, float], sizes: Mapping[str, int]) -> float
 
 
 def power_at(se: float, gap: float = GAP_POINTS, alpha: float = ALPHA, seeds: int = SEEDS) -> float:
+    if se <= 0:
+        return 1.0 if gap > 0 else 0.0
     z = NormalDist().inv_cdf(1 - alpha)
     return NormalDist().cdf(gap / (se / math.sqrt(seeds)) - z)
+
+
+def both_clear(gap: float, sd: float, line: float, rho: float, steps: int = 4000) -> float:
+    if sd <= 0:
+        return 1.0 if gap >= line else 0.0
+    unit = NormalDist()
+    h = (line - gap) / sd
+    if rho >= 1:
+        return 1 - unit.cdf(h)
+    spread = math.sqrt(1 - rho * rho)
+    top = max(h, 0.0) + 10.0
+    width = (top - h) / steps
+
+    def f(z: float) -> float:
+        return unit.pdf(z) * (1 - unit.cdf((h - rho * z) / spread))
+
+    total = f(h) + f(top) + sum((4 if i % 2 else 2) * f(h + i * width) for i in range(1, steps))
+    return min(1.0, max(0.0, total * width / 3))
+
+
+def kill_rule_odds(
+    gap: float,
+    se: float,
+    seeds: int = SEEDS,
+    rho: float = MARGIN_CORRELATION,
+    training_sd: float = 0.0,
+    line: float = GAP_POINTS,
+) -> dict[str, float]:
+    p = both_clear(gap, math.hypot(se, training_sd), line, rho)
+    keep, kill = p**seeds, (1 - p) ** seeds
+    return {"seed_passes": p, "continue": keep, "mixed": max(0.0, 1 - keep - kill), "kill": kill}
 
 
 def required_sizes(
@@ -84,12 +118,45 @@ def table(values: list[float], available: Mapping[str, int]) -> list[str]:
     return lines
 
 
+def odds_table(
+    gaps: list[float], se: float, seed_counts: list[int], rho: float, training_sd: float
+) -> list[str]:
+    head = " | ".join(f"{k} seeds: continue / mixed / kill" for k in seed_counts)
+    lines = [f"| true gap | one seed clears | {head} |"]
+    lines.append("| ---: | ---: |" + " --- |" * len(seed_counts))
+    for g in gaps:
+        cells = []
+        for k in seed_counts:
+            o = kill_rule_odds(g, se, k, rho, training_sd)
+            cells.append(f"{o['continue']:.0%} / {o['mixed']:.0%} / {o['kill']:.0%}")
+        p = kill_rule_odds(g, se, 1, rho, training_sd)["seed_passes"]
+        lines.append(f"| {g:g} | {p:.0%} | " + " | ".join(cells) + " |")
+    return lines
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description="Eval problems needed for the kill rule to see a 2-point gap"
     )
     parser.add_argument("--discordance", type=float, nargs="+", default=[0.05, 0.1, 0.15, 0.2, 0.3])
+    parser.add_argument(
+        "--odds", action="store_true", help="odds of each verdict at a per-seed SE, by true gap"
+    )
+    parser.add_argument("--se", type=float, help="per-seed SE of the margin; default the target")
+    parser.add_argument("--gaps", type=float, nargs="+", default=[0, 1, 2, 3, 4, 5])
+    parser.add_argument("--seeds", type=int, nargs="+", default=[2, 3])
+    parser.add_argument("--rho", type=float, default=MARGIN_CORRELATION)
+    parser.add_argument("--training-sd", type=float, default=0.0)
     args = parser.parse_args(argv)
+    if args.odds:
+        se = args.se if args.se is not None else target_seed_se()
+        print(
+            f"continue needs full - sft and full - moe both >= {GAP_POINTS} points on every seed; "
+            f"per-seed SE {se:.2f}, correlation {args.rho} between the two margins, "
+            f"seed-to-seed training SD {args.training_sd}"
+        )
+        print("\n".join(odds_table(args.gaps, se, args.seeds, args.rho, args.training_sd)))
+        return
     target = target_seed_se()
     print(
         f"one-sided paired test, alpha {ALPHA}, power {POWER:.0%}, gap {GAP_POINTS} points, "

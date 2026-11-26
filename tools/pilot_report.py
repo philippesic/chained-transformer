@@ -23,6 +23,7 @@ from tools.pilot import (
     arms_of,
     load_plan,
     score_table,
+    uncounted,
     verdict,
 )
 
@@ -36,15 +37,21 @@ TRANSITIONS = tuple(f"{a}->{b}" for a in MODE_NAMES for b in MODE_NAMES if a != 
 Stats = dict[str, float | None]
 TABLE1_NOTE = (
     "Mean over seeds, then each seed in parentheses. Scores are pass rates in points; mean is "
-    "the mean accuracy over the benchmarks run (HE+ counts as plus). leak/1k is think words per "
-    "1k answer words, pooled. train GiB is peak reserved memory in training (largest of the "
-    "three runs for separate); eval GiB is peak eval memory. active counts the parameters one "
-    "token passes through."
+    "the mean accuracy over the planned benchmarks, n/a until all are scored (HE+ counts as "
+    "plus). leak/1k is think words per 1k answer words, pooled. train GiB is peak reserved "
+    "memory in training (largest of the three runs for separate); eval GiB is peak eval memory. "
+    "active counts the parameters one token passes through."
 )
 
 
 def read_json(path: Path) -> dict[str, Any] | None:
-    return json.loads(path.read_text()) if path.exists() else None
+    if not path.exists():
+        return None
+    try:
+        data: dict[str, Any] = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return None
+    return data
 
 
 def numel(params: Iterable[torch.nn.Parameter]) -> int:
@@ -96,8 +103,10 @@ def weighted(pairs: Sequence[tuple[float | None, float]]) -> float | None:
     return sum(v * w for v, w in known) / total if total else None
 
 
-def eval_metrics(report: dict[str, Any]) -> Stats:
-    benches: dict[str, Any] = report.get("benchmarks", {})
+def eval_metrics(report: dict[str, Any], planned: Sequence[str]) -> Stats:
+    benches: dict[str, Any] = {
+        b: report["benchmarks"][b] for b in planned if b in report.get("benchmarks", {})
+    }
     out: Stats = {}
     for name, bench in benches.items():
         scores = bench.get("scores", {})
@@ -117,7 +126,8 @@ def eval_metrics(report: dict[str, Any]) -> Stats:
         for b in benches.values()
         if b.get("scores", {}).get("accuracy") is not None
     ]
-    out["mean"] = 100.0 * statistics.fmean(accuracies) if accuracies else None
+    complete = len(accuracies) == len(planned) > 0
+    out["mean"] = 100.0 * statistics.fmean(accuracies) if complete else None
     leak = [b.get("leakage", {}) for b in benches.values()]
     out["leakage"] = weighted(
         [
@@ -129,6 +139,7 @@ def eval_metrics(report: dict[str, Any]) -> Stats:
         ]
     )
     perf = [b.get("perf", {}) for b in benches.values()]
+    perf = [p for p in perf if (p.get("new_tokens") or 0) > 0]
     seconds = sum(p.get("seconds") or 0.0 for p in perf)
     out["tokens_per_s"] = sum(p.get("new_tokens") or 0 for p in perf) / seconds if seconds else None
     peaks = [p.get("peak_alloc_gib", p.get("peak_rss_gib")) for p in perf]
@@ -155,12 +166,14 @@ def train_peak(root: Path, run: EvalRun) -> float | None:
     return max(peaks) if peaks else None
 
 
-def collect(root: Path, evals: list[EvalRun]) -> dict[str, dict[int, Stats]]:
+def collect(
+    root: Path, evals: list[EvalRun], planned: Sequence[str]
+) -> dict[str, dict[int, Stats]]:
     cache: dict[str, dict[str, int]] = {}
     table: dict[str, dict[int, Stats]] = {}
     for run in evals:
         report = read_json(root / run.id / "eval" / "report.json")
-        stats: Stats = eval_metrics(report) if report else {}
+        stats: Stats = eval_metrics(report, planned) if report else {}
         stats["train_peak_gib"] = train_peak(root, run)
         stats.update(run_params(root, run, cache))
         table.setdefault(run.arm, {})[run.seed] = stats
@@ -262,15 +275,19 @@ MARGINS = (
 )
 
 
-def passes(root: Path, run_id: str) -> dict[str, dict[str, bool]]:
+def passes(root: Path, run_id: str, planned: Sequence[str]) -> dict[str, dict[str, bool]]:
     out: dict[str, dict[str, bool]] = {}
-    for scores in sorted((root / run_id / "eval").glob("*/scores.jsonl")):
-        out[scores.parent.name] = {s["task_id"]: bool(s["passed"]) for s in read_jsonl(scores)}
+    for bench in planned:
+        scores = root / run_id / "eval" / bench / "scores.jsonl"
+        if scores.exists():
+            out[bench] = {s["task_id"]: bool(s["passed"]) for s in read_jsonl(scores)}
     return out
 
 
 def paired_se(a: dict[str, dict[str, bool]], b: dict[str, dict[str, bool]]) -> float | None:
     benches = sorted(set(a) & set(b))
+    if len(benches) < max(len(a), len(b)):
+        return None
     variances = []
     for bench in benches:
         ids = sorted(set(a[bench]) & set(b[bench]))
@@ -286,7 +303,10 @@ def paired_se(a: dict[str, dict[str, bool]], b: dict[str, dict[str, bool]]) -> f
 def margin_errors(root: Path, cfg: PilotConfig) -> dict[str, dict[str, float | None]]:
     out: dict[str, dict[str, float | None]] = {}
     for seed in cfg.seeds:
-        runs = {arm: passes(root, f"{arm}-s{seed}") for arm in ("full", "sft", "moe", "lora")}
+        runs = {
+            arm: passes(root, f"{arm}-s{seed}", cfg.benchmarks)
+            for arm in ("full", "sft", "moe", "lora")
+        }
         out[str(seed)] = {key: paired_se(runs[x], runs[y]) for key, x, y in MARGINS}
     return out
 
@@ -379,11 +399,19 @@ def table_serving(cfg: PilotConfig, stats: dict[str, dict[int, Stats]]) -> list[
     )
 
 
-def notes(root: Path, evals: list[EvalRun], stats: dict[str, dict[int, Stats]]) -> list[str]:
+def notes(
+    root: Path,
+    evals: list[EvalRun],
+    stats: dict[str, dict[int, Stats]],
+    skipped: dict[str, str],
+) -> list[str]:
     out = []
     missing = [e.id for e in evals if not (root / e.id / "eval" / "report.json").exists()]
     if missing:
         out.append(f"No eval report yet for: {', '.join(missing)}.")
+    if skipped:
+        why = "; ".join(f"{k} ({v})" for k, v in skipped.items())
+        out.append(f"Not counted in the verdict, though Table 1 shows their reports: {why}.")
     reports = [read_json(root / e.id / "eval" / "report.json") for e in evals]
     present = [r for r in reports if r]
     if any(r.get("smoke") for r in present):
@@ -404,11 +432,13 @@ def notes(root: Path, evals: list[EvalRun], stats: dict[str, dict[int, Stats]]) 
 
 def build(root: Path, data_limit: int | None) -> tuple[dict[str, Any], str]:
     cfg, trains, evals = load_plan(root)
-    result = verdict(score_table(root, evals), cfg.seeds)
+    result = verdict(score_table(root, trains, evals, cfg.benchmarks), cfg.seeds, cfg.benchmarks)
     result["margins_se"] = margin_errors(root, cfg)
-    stats = collect(root, evals)
+    skipped = uncounted(root, trains, evals)
+    result["not_counted"] = skipped
+    stats = collect(root, evals, cfg.benchmarks)
     sw = switching(root, cfg, evals, data_limit)
-    remarks = notes(root, evals, stats)
+    remarks = notes(root, evals, stats, skipped)
     if cfg.eval_set == "verdict" and cfg.eval_sample:
         sizes = ", ".join(f"{b} {n}" for b, n in cfg.eval_sample.items())
         remarks.insert(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -112,14 +113,17 @@ def test_eval_needs_trained_checkpoints(tmp_path: Path) -> None:
         pilot.main(["eval-one", "--root", str(root), "--run", "separate-s0"])
 
 
-def _report(root: Path, run_id: str, math: float, code: float) -> None:
+def _report(root: Path, run_id: str, math: float, code: float, lcb: float | None = None) -> None:
     out = root / run_id / "eval"
-    out.mkdir(parents=True)
+    out.mkdir(parents=True, exist_ok=True)
     benches = {
         "math500": {"scores": {"accuracy": math}},
         "humanevalplus": {"scores": {"accuracy": code}},
+        "livecodebench": {"scores": {"accuracy": code if lcb is None else lcb}},
     }
     (out / "report.json").write_text(json.dumps({"benchmarks": benches}))
+    _done(root, "train", run_id)
+    _done(root, "eval", run_id)
 
 
 @pytest.mark.parametrize(
@@ -272,3 +276,211 @@ def test_compare_reports_the_verdict_sample_power(tmp_path: Path) -> None:
     sample = json.loads((root / "compare.json").read_text())["verdict_sample"]
     assert sample["problems"]["math500"] == 361 and sample["observed"] is False
     assert 0.79 < sample["power_for_a_2_point_gap"] < 0.85
+
+
+def _table(margins: dict[int, float | None], lora: float = 0.0) -> dict[str, dict[int, Any]]:
+    benches = ("math500", "humanevalplus")
+    table: dict[str, dict[int, Any]] = {a: {} for a in ("full", "sft", "moe", "lora")}
+    for seed, margin in margins.items():
+        table["sft"][seed] = dict.fromkeys(benches, 40.0)
+        table["moe"][seed] = dict.fromkeys(benches, 40.0)
+        table["lora"][seed] = dict.fromkeys(benches, 40.0 + lora)
+        if margin is not None:
+            table["full"][seed] = dict.fromkeys(benches, 40.0 + margin)
+    return table
+
+
+@pytest.mark.parametrize(
+    ("margins", "expected"),
+    [
+        ({0: 3.0, 1: 1.0}, "mixed"),
+        ({0: 1.0, 1: 3.0}, "mixed"),
+        ({0: 3.0, 1: 2.5, 2: 2.0}, "full beats sft"),
+        ({0: 3.0, 1: 2.5, 2: 1.9}, "mixed"),
+        ({0: 1.0, 1: 0.0, 2: -2.0}, "kill rule met"),
+        ({0: 3.0, 1: 3.0, 2: None}, "incomplete"),
+    ],
+)
+def test_verdict_when_seeds_disagree_and_with_a_third_seed(
+    margins: dict[int, float | None], expected: str
+) -> None:
+    result = pilot.verdict(_table(margins), list(margins), ["math500", "humanevalplus"])
+    assert result["kill_rule"].startswith(expected)
+    assert set(result["margins"]) == {str(s) for s in margins}
+
+
+def test_margins_of_exactly_two_and_one_point_count_despite_float_error() -> None:
+    table = _table({0: 0.0, 1: 0.0})
+    for seed in (0, 1):
+        table["sft"][seed] = table["moe"][seed] = {"math500": 100 * 0.638}
+        table["full"][seed] = {"math500": 100 * 0.658}
+        table["lora"][seed] = {"math500": 100 * 0.648}
+    assert 100 * 0.658 - 100 * 0.638 < 2.0
+    result = pilot.verdict(table, [0, 1], ["math500"])
+    assert result["kill_rule"].startswith("full beats sft")
+    table["lora"][0] = {"math500": 100 * 0.668}
+    assert pilot.verdict(table, [0, 1], ["math500"])["lora"].startswith("lora is within")
+
+
+def test_lora_tie_is_judged_even_while_sft_is_missing() -> None:
+    table = _table({0: 3.0, 1: 3.0}, lora=3.5)
+    del table["sft"][1]
+    result = pilot.verdict(table, [0, 1], ["math500", "humanevalplus"])
+    assert result["kill_rule"].startswith("incomplete")
+    assert result["lora"].startswith("lora is within")
+    assert result["margins"]["1"] == {
+        "full_minus_sft": None,
+        "full_minus_moe": None,
+        "lora_minus_full": 0.5,
+    }
+
+
+def test_primary_averages_the_planned_benchmarks_only(tmp_path: Path) -> None:
+    root = _plan(tmp_path)
+    for seed in (0, 1):
+        _report(root, f"sft-s{seed}", 0.40, 0.40)
+        _report(root, f"moe-s{seed}", 0.41, 0.41)
+        _report(root, f"lora-s{seed}", 0.40, 0.40)
+        _report(root, f"full-s{seed}", 0.45, 0.45)
+    path = root / "full-s0" / "eval" / "report.json"
+    report = json.loads(path.read_text())
+    del report["benchmarks"]["humanevalplus"]
+    report["benchmarks"]["old"] = {"scores": {"accuracy": 0.0}}
+    path.write_text(json.dumps(report))
+    pilot.main(["compare", "--root", str(root)])
+    result = json.loads((root / "compare.json").read_text())
+    assert result["kill_rule"].startswith("incomplete")
+    assert result["scores_points"]["full"]["0"] == {"math500": 45.0, "livecodebench": 45.0}
+
+
+def test_failed_stale_and_retrained_evals_are_not_counted(tmp_path: Path) -> None:
+    root = _plan(tmp_path)
+    for seed in (0, 1):
+        for arm in ("sft", "moe", "lora", "full"):
+            _report(root, f"{arm}-s{seed}", 0.45 if arm == "full" else 0.40, 0.40)
+    cfg, trains, evals = pilot.load_plan(root)
+    assert pilot.uncounted(root, trains, evals) == {}
+    pilot.mark_failed(root, "full-s0", "eval", 2)
+    assert pilot.read_status(root, "full-s0", "eval")["argv"]
+    status = pilot.read_status(root, "full-s1", "eval")
+    pilot.write_status(root, "full-s1", "eval", state=pilot.DONE, argv=status["argv"][:-2])
+    stamp = pilot.trained_stamp(root, ["moe-s0"])
+    pilot.write_status(root, "moe-s0", "eval", state=pilot.DONE, argv=evals[3].argv, trained=stamp)
+    time.sleep(1.1)
+    _done(root, "train", "moe-s0")
+    assert pilot.uncounted(root, trains, evals) == {
+        "full-s0": "eval failed",
+        "full-s1": "evaluated under an earlier plan (sample or flags changed)",
+        "moe-s0": "retrained after this eval",
+    }
+    pending = pilot.pending_steps(root, trains, evals, [])
+    assert pending == [("eval-one", "full-s0"), ("eval-one", "moe-s0"), ("eval-one", "full-s1")]
+    pilot.main(["compare", "--root", str(root)])
+    assert json.loads((root / "compare.json").read_text())["kill_rule"].startswith("incomplete")
+
+
+def test_a_retrained_arm_is_evaluated_again_from_scratch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import evals.run
+
+    root = _plan(tmp_path)
+    _done(root, "train", "sft-s0")
+    seen: list[list[str]] = []
+
+    def fake_eval(argv: list[str]) -> None:
+        seen.append(argv)
+        out = Path(argv[argv.index("--out") + 1])
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "report.json").write_text("{}")
+
+    monkeypatch.setattr(evals.run, "main", fake_eval)
+    pilot.main(["eval-one", "--root", str(root), "--run", "sft-s0"])
+    first = pilot.read_status(root, "sft-s0", "eval")["trained"]
+    _, trains, evals_ = pilot.load_plan(root)
+    assert ("eval-one", "sft-s0") not in pilot.pending_steps(root, trains, evals_, ["sft-s0"])
+    time.sleep(1.1)
+    _done(root, "train", "sft-s0")
+    assert pilot.pending_steps(root, trains, evals_, ["sft-s0"]) == [("eval-one", "sft-s0")]
+    pilot.main(["eval-one", "--root", str(root), "--run", "sft-s0"])
+    assert pilot.read_status(root, "sft-s0", "eval")["trained"] != first
+    assert len(list((root / "sft-s0").glob("eval-before-*/report.json"))) == 1
+    assert len(seen) == 2
+
+
+def test_eval_waits_for_training_under_the_current_plan(tmp_path: Path) -> None:
+    root = _plan(tmp_path)
+    pilot.write_status(root, "sft-s0", "train", state=pilot.DONE, argv=["--old"])
+    with pytest.raises(SystemExit, match="for the current plan first"):
+        pilot.main(["eval-one", "--root", str(root), "--run", "sft-s0"])
+
+
+def test_zero_discordance_sizes_and_compares_without_crashing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _plan(tmp_path)
+    same = [i % 2 == 0 for i in range(361)]
+    for bench in ("math500", "humanevalplus", "livecodebench"):
+        for run_id in ("full-s0", "sft-s0", "moe-s0"):
+            _scores(root, run_id, bench, same[: 164 if bench == "humanevalplus" else 361])
+    assert pilot.resize(root) is None
+    pilot.main(["size", "--root", str(root)])
+    pilot.main(["compare", "--root", str(root)])
+    sample = json.loads((root / "compare.json").read_text())["verdict_sample"]
+    assert sample["power_for_a_2_point_gap"] == 1.0 and sample["per_seed_se"] == 0.0
+
+
+def test_compare_reports_the_odds_of_each_verdict(tmp_path: Path) -> None:
+    root = _plan(tmp_path)
+    pilot.main(["compare", "--root", str(root)])
+    odds = json.loads((root / "compare.json").read_text())["verdict_sample"]
+    odds = odds["verdict_odds_by_true_gap"]
+    assert odds["2"]["continue"] < 0.15 and odds["4"]["continue"] > 0.8
+    for by_gap in odds.values():
+        assert by_gap["continue"] + by_gap["mixed"] + by_gap["kill"] == pytest.approx(1, abs=0.02)
+
+
+def test_train_extra_cannot_override_what_the_plan_sets(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit, match="--lora-rank"):
+        _plan(tmp_path, train_extra="--lora-rank 8")
+    base = ["plan", "--name", "p", "--data", "d", "--root", str(tmp_path)]
+    with pytest.raises(SystemExit, match="--moe-top-k=1"):
+        pilot.main([*base, "--train-extra=--moe-top-k=1"])
+    root = _plan(tmp_path, lora_rank="8", moe_top_k="1", train_extra="--log-every 5")
+    cfg, trains, _ = pilot.load_plan(root)
+    assert cfg.lora_rank == 8 and cfg.moe_top_k == 1
+    argv = next(r.argv for r in trains if r.arm == "lora")
+    assert argv[argv.index("--lora-rank") + 1] == "8" and argv[-2:] == ["--log-every", "5"]
+
+
+def test_same_plan_command_is_accepted_after_the_sample_grows(tmp_path: Path) -> None:
+    root = _plan(tmp_path)
+    cfg, _, _ = pilot.load_plan(root)
+    cfg.eval_sample = {"math500": 500, "humanevalplus": 164, "livecodebench": 400}
+    pilot.write_plan(root, cfg)
+    _plan(tmp_path)
+    assert pilot.load_plan(root)[0].eval_sample == cfg.eval_sample
+    pilot.main(
+        [
+            "plan",
+            "--name",
+            "p",
+            "--data",
+            str(tmp_path / "data"),
+            "--root",
+            str(tmp_path),
+            "--steps",
+            "500",
+            "--replace",
+        ]
+    )
+    replaced = pilot.load_plan(root)[0]
+    assert replaced.steps == 500 and replaced.eval_sample == cfg.eval_sample
+    with pytest.raises(SystemExit, match="different config"):
+        _plan(tmp_path, steps="700")
+
+
+def test_status_reads_past_a_cut_off_training_log(tmp_path: Path) -> None:
+    log = tmp_path / "train.jsonl"
+    log.write_text('{"step": 3, "loss": 1.5}\n{"step": 4, "lo')
+    assert pilot.last_json_line(log) == {"step": 3, "loss": 1.5}
