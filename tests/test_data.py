@@ -11,7 +11,12 @@ from chained_transformer.modes import Mode, ModeTracker, segment_labels
 
 @pytest.fixture(scope="module")
 def texts_and_tokenizer() -> tuple[TokenTexts, PreTrainedTokenizerBase]:
-    tok = load_tokenizer()
+    try:
+        tok = load_tokenizer()
+    except OSError as exc:
+        pytest.skip(
+            f"cannot load the Qwen3 tokenizer (not cached, Hugging Face unreachable?): {exc}"
+        )
     return TokenTexts.from_tokenizer(tok), tok
 
 
