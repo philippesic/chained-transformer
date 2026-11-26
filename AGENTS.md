@@ -4,9 +4,10 @@ Research code for a Qwen3 transformer with one shared trunk and KV cache and sev
 modes (think, code, answer) that the model switches between mid-answer. The
 [README](README.md) states the idea, prior art and experiment plan.
 
-Checkout: `/home/philip/chained-transformer` on the RTX 5080 host. A plain copy (rsync, not a
-Git remote) sits at the same path on the RTX 2080 Ti host, SSH alias `pstack-2080`; it does not
-sync itself. Local only: no remote, do not push or publish until Philip says so.
+Checkouts: `/home/philip/chained-transformer` on the RTX 5080 host (main) and on the RTX 2080 Ti
+host (SSH alias `pstack-2080`). Each lists the other as a Git remote (`2080`, `5080`); see
+[development](docs/development.md#two-machines). No hosted remote: do not push or publish elsewhere
+until Philip says so.
 
 ## Navigation
 

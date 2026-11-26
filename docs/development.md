@@ -32,6 +32,21 @@ processes. The RTX 5080 is shared with BitDraft: check `nvidia-smi` and `pueue s
 GPU work, never stop another project's job, and queue behind it in pueue's `gpu` group instead.
 Outputs go to `artifacts/smoke/<timestamp>/` (`smoke.json` plus one log per step).
 
+## Two machines
+
+The 5080 checkout is the main one; the 2080 Ti checkout tracks it (`main` follows `5080/main`).
+Each checkout names the other as a remote over the Tailscale SSH aliases. Git refuses pushes
+into a checked-out branch, so move commits by pulling on the receiving machine:
+
+```sh
+git pull --ff-only            # on the 2080: take the 5080's commits
+git pull --ff-only 2080 main  # on the 5080: take the 2080's commits
+```
+
+Commit work on one machine before pulling on the other. `artifacts/` is not in Git; copy what
+a run needs with `rsync`. The 2080 Ti (11 GB, compute capability 7.5) has no fast bf16, so its
+memory and speed numbers do not stand in for the 5080's.
+
 ## Conventions
 
 - No code comments or docstrings; use names, types and tests. Rationale belongs in these docs
@@ -39,4 +54,4 @@ Outputs go to `artifacts/smoke/<timestamp>/` (`smoke.json` plus one log per step
 - Product code in `chained_transformer/` never imports `tools/` or `tests/`.
 - Everything large stays in ignored `artifacts/`. Compact evidence that a result needs is
   copied into `results/<name>/`.
-- The repository is local only: no remote, no push, until Philip says otherwise.
+- No hosted remote and no publishing until Philip says otherwise.
