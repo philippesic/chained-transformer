@@ -19,6 +19,7 @@ from chained_transformer.memory import (
     estimate,
 )
 from chained_transformer.train import ALLOC_CONF
+from tools.gpu_smoke import other_gpu_clients
 
 ARMS = ("sft", "full", "lora", "moe", "separate")
 PHASES = ("forward", "backward", "optimizer")
@@ -253,6 +254,7 @@ def main() -> int:
     parser.add_argument("--steps", type=int, default=3)
     parser.add_argument("--budget-gib", type=float, default=None)
     parser.add_argument("--out", type=Path, default=Path("artifacts/memory-check.json"))
+    parser.add_argument("--allow-other-clients", action="store_true")
     parser.add_argument("--single", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--arm", default="sft", help=argparse.SUPPRESS)
     parser.add_argument("--data", type=Path, default=None, help=argparse.SUPPRESS)
@@ -264,6 +266,11 @@ def main() -> int:
         args.result.write_text(json.dumps(result, indent=2) + "\n")
         return 0
 
+    if args.device.startswith("cuda") and not args.allow_other_clients:
+        clients = other_gpu_clients()
+        if clients:
+            print("GPU busy; not measuring. Other compute clients:", *clients, sep="\n  ")
+            return 2
     shape = QWEN3_0_6B if args.layers is None else replace(QWEN3_0_6B, layers=args.layers)
     report: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory() as tmp:
