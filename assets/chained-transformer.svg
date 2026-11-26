@@ -1,27 +1,30 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
   <title id="title">chained-transformer</title>
-  <desc id="desc">Two stacked isometric layer slabs on a navy tile, with a chain of dots rising from the top slab to a warm dot.</desc>
+  <desc id="desc">Three soft spheres linked in a rising chain on a navy gradient tile, the last one warm.</desc>
   <defs>
     <linearGradient id="tile" x1="32" y1="0" x2="32" y2="64" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#1d2c47"/>
-      <stop offset="1" stop-color="#0e1524"/>
+      <stop stop-color="#22325a"/>
+      <stop offset="1" stop-color="#0d1322"/>
     </linearGradient>
-    <linearGradient id="top" x1="9" y1="22" x2="47" y2="42" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#aef3e0"/>
-      <stop offset="1" stop-color="#6fcdb9"/>
-    </linearGradient>
+    <radialGradient id="mint" cx="0.35" cy="0.32" r="0.75">
+      <stop stop-color="#d8fbf0"/>
+      <stop offset="0.45" stop-color="#7fd8c3"/>
+      <stop offset="1" stop-color="#2f8582"/>
+    </radialGradient>
+    <radialGradient id="warm" cx="0.35" cy="0.32" r="0.75">
+      <stop stop-color="#fff4cf"/>
+      <stop offset="0.45" stop-color="#f6cf6b"/>
+      <stop offset="1" stop-color="#c98d2c"/>
+    </radialGradient>
   </defs>
   <rect width="64" height="64" rx="15" fill="url(#tile)"/>
-  <g opacity="0.9">
-    <path d="M 9 41 L 28 51.5 L 28 56.5 L 9 46 Z" fill="#26506a"/>
-    <path d="M 28 51.5 L 47 41 L 47 46 L 28 56.5 Z" fill="#1d4058"/>
-    <path d="M 9 41 L 28 30.5 L 47 41 L 28 51.5 Z" fill="#2f6280"/>
+  <g fill="#2a4f6b" opacity="0.75">
+    <ellipse cx="16" cy="52" rx="6.5" ry="2.6"/>
+    <ellipse cx="32" cy="41" rx="6.5" ry="2.6"/>
+    <ellipse cx="48" cy="30" rx="7" ry="2.8"/>
   </g>
-  <path d="M 9 31 L 28 41.5 L 28 47.5 L 9 37 Z" fill="#4aa39c"/>
-  <path d="M 28 41.5 L 47 31 L 47 37 L 28 47.5 Z" fill="#37817f"/>
-  <path d="M 9 31 L 28 20.5 L 47 31 L 28 41.5 Z" fill="url(#top)"/>
-  <path d="M 28 31 L 39.5 20.5 L 50 12" fill="none" stroke="#e8edf5" stroke-opacity="0.5" stroke-width="2" stroke-linecap="round"/>
-  <circle cx="28" cy="31" r="3.3" fill="#ffffff"/>
-  <circle cx="39.5" cy="20.5" r="3.3" fill="#ffffff"/>
-  <circle cx="50" cy="12" r="6.5" fill="#f6cf6b"/>
+  <path d="M 16 42 L 32 31 L 48 19" fill="none" stroke="#5fb8a8" stroke-width="3.5" stroke-linecap="round"/>
+  <circle cx="16" cy="42" r="7" fill="url(#mint)"/>
+  <circle cx="32" cy="31" r="7" fill="url(#mint)"/>
+  <circle cx="48" cy="19" r="7.5" fill="url(#warm)"/>
 </svg>
