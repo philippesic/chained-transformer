@@ -21,11 +21,25 @@ experiment worth running first.
   and values from the first pass reused at every depth).
 - MoEUT (Csordás et al., arXiv 2405.16039, NeurIPS 2024): per-token MoE in both attention and
   MLP inside a looped layer group.
-- From the project's earlier sweep, not re-checked tonight: Library of Layers (2611.03526,
-  whole blocks per 128-token window) and per-loop-index LoRA (2610.40325).
+- How to Loop Your Transformer (Ekbote et al., Meta, arXiv 2610.40325): from-scratch looped
+  models up to 1B. Looping a middle block pays best when training compute is limited; a LoRA
+  per loop ("Loop Matrix") helps at 4 and 8 loops, little at 2; one KV cache from the first
+  loop plus small per-loop sliding windows comes close to a full cache per loop.
+- Training-Free Looped Transformers (arXiv 2605.23872): re-applies a middle window of a frozen
+  pretrained model at inference with no training, Qwen3-0.6B among the models. Naive repetition
+  usually hurts; a Runge-Kutta-style update over about 4 layers centred at 45 to 60% depth
+  helps (for example +2.6 points MMLU-Pro on Qwen3-4B-Instruct), with failures clustered in
+  small distilled models. Loop passes read the existing cache and add no entries. Depth is the
+  same for every token.
+- Library of Layers (McLeish et al., arXiv 2611.03526): a top-1 router picks the next block
+  from a shared library for each window of tokens; forcing the route steers the strategy on
+  sudoku and mazes.
+- The think/no-think signal reaches the response through five to seven attention heads in the
+  models studied (arXiv 2610.14270), which says mode is already readable from attention, not
+  that depth should depend on it.
 
-None of these route by a discrete mode the model writes itself. Depth is either fixed,
-chosen by a learned router, or chosen per window.
+None of these choose depth by a discrete mode the model writes itself. Depth is fixed, chosen
+by a learned router, or chosen per window.
 
 ## Three ways to combine them
 
@@ -56,20 +70,32 @@ first:
 - Re-run shallow tokens to the needed depth on a switch. Correct but brings back the
   re-prefill cost the design exists to avoid, so it is the baseline, not the plan.
 
-## First experiment, if the pilot passes
+## First experiments
 
-No conversion to a looped model at first. Take the pilot's best mode model and, for think
-tokens only, run a middle span of layers (for example layers 10 to 17) a second time with
-keys and values shared across the two passes. Answer and code tokens are unchanged. Train
-briefly with the same data and compare against the same model without the repeat:
+**Step 0, no training (can run before the pilot).** Training-Free Looped Transformers already
+loops Qwen3-0.6B at inference, so the cheapest test of "mode sets depth" needs no training at
+all. On base Qwen3-0.6B, with the generation hook's mode tracker:
+
+- loop a 4-layer window centred near 45 to 60% depth (about layers 12 to 15 of 28) with that
+  paper's Runge-Kutta update, for think tokens only; compare with looping every token and with
+  no loop;
+- loop passes read the single existing cache and write nothing, as in that paper, so a mode
+  switch still re-encodes nothing;
+- measure MATH500 accuracy on a fixed subset, think length and tokens/s, two seeds of sampling.
+
+Expect small or negative effects at 0.6B (the paper's failures cluster in small distilled
+models). The question is only whether think-only looping is no worse than looping everything
+while costing less; if both are worse than no loop, stop here.
+
+**Step 1, trained, if step 0 holds and the pilot passes.** Take the pilot's best mode model,
+run the same window a second time for think tokens only with keys and values shared across
+passes, train briefly on the same data and compare against the same model without the repeat:
 
 - MATH500 accuracy and think-segment length at equal answer cost;
 - whether answer quality moves at all (it should not, since answer tokens run unchanged);
-- step time and memory, since think tokens are about 95% of training tokens and the repeat
-  adds about 8/28 of the layer compute for them.
+- step time and memory, since think tokens are about 95% of training tokens.
 
 Kill rule: drop the looping line if the repeat does not improve MATH500 by more than seed
-noise at two seeds, or if shared keys and values cost more than the repeat gains.
-
-The variant with no shared keys and values (option 2 of the KV list) is the follow-up only if
-the shared version shows a gain worth keeping.
+noise at two seeds, or if shared keys and values cost more than the repeat gains. A separate
+cache per pass (option 2 of the KV list) is the follow-up only if the shared version shows a
+gain worth keeping.
