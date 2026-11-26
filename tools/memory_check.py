@@ -18,6 +18,7 @@ from chained_transformer.memory import (
     Setup,
     estimate,
 )
+from chained_transformer.train import ALLOC_CONF
 
 ARMS = ("sft", "full", "lora", "moe", "separate")
 PHASES = ("forward", "backward", "optimizer")
@@ -117,17 +118,24 @@ class CudaPhases:
         self.torch = torch
         self.current = "setup"
         self.peaks: dict[str, float] = {}
+        self.reserved: dict[str, float] = {}
 
     def __call__(self, name: str) -> None:
         cuda = self.torch.cuda
-        cuda.synchronize()
-        peak = cuda.max_memory_allocated() / GiB
-        self.peaks[self.current] = max(self.peaks.get(self.current, 0.0), peak)
-        cuda.reset_peak_memory_stats()
+        if cuda.is_initialized():
+            cuda.synchronize()
+            peak = cuda.max_memory_allocated() / GiB
+            reserved = cuda.max_memory_reserved() / GiB
+            self.peaks[self.current] = max(self.peaks.get(self.current, 0.0), peak)
+            self.reserved[self.current] = max(self.reserved.get(self.current, 0.0), reserved)
+            cuda.reset_peak_memory_stats()
         self.current = name
 
     def summary(self) -> dict[str, Any]:
-        return {k: {"peak_gib": round(v, 4)} for k, v in self.peaks.items()}
+        return {
+            k: {"peak_gib": round(v, 4), "reserved_gib": round(self.reserved[k], 4)}
+            for k, v in self.peaks.items()
+        }
 
 
 @contextlib.contextmanager
@@ -166,20 +174,20 @@ def run_single(args: argparse.Namespace) -> dict[str, Any]:
             measured = tracker.summary()
         else:
             phases = CudaPhases()
-            phases("setup")
-            status = "ok"
+            status, oom_phase = "ok", None
             try:
                 train_main(argv, on_phase=phases)
             except Exception as exc:
                 if "out of memory" not in str(exc).lower():
                     raise
-                status = "oom"
+                status, oom_phase = "oom", phases.current
             phases("done")
             measured = phases.summary()
             measured["status"] = status
-            import torch
-
-            measured["reserved_peak_gib"] = round(torch.cuda.max_memory_reserved() / GiB, 4)
+            measured["oom_phase"] = oom_phase
+            measured["reserved_peak_gib"] = max(
+                (v["reserved_gib"] for v in measured.values() if isinstance(v, dict)), default=0.0
+            )
         summary_path = out / "summary.json"
         summary = json.loads(summary_path.read_text()) if summary_path.exists() else {}
     return {"setup": setup.__dict__, "measured": measured, "train_summary": summary}
@@ -267,6 +275,8 @@ def main() -> int:
                 if args.freeze_embeddings:
                     cmd.append("--freeze-embeddings")
                 env = {**os.environ, "OMP_NUM_THREADS": os.environ.get("OMP_NUM_THREADS", "4")}
+                alloc = ALLOC_CONF if args.harness == "fixed" else "expandable_segments:False"
+                env["PYTORCH_ALLOC_CONF"] = env["PYTORCH_CUDA_ALLOC_CONF"] = alloc
                 proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
                 if proc.returncode != 0 or not result_path.exists():
                     tail = (proc.stderr or proc.stdout)[-2000:]
@@ -279,7 +289,10 @@ def main() -> int:
                 entry = {"arm": arm, "seq_len": seq, **result, "comparison": rows}
                 verdict = ""
                 if args.budget_gib is not None:
-                    peak = rows["peak"]["measured_gib"]
+                    peak = max(
+                        rows["peak"]["measured_gib"],
+                        result["measured"].get("reserved_peak_gib", 0.0),
+                    )
                     status = result["measured"].get("status", "ok")
                     fits = status == "ok" and peak <= args.budget_gib
                     entry["fits_budget"] = fits

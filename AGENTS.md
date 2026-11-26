@@ -25,7 +25,10 @@ elsewhere without asking.
 - `chained_transformer/generate.py`: the mode-tracking generation hook and the separate-models baseline.
 - `chained_transformer/model.py`: base model loading and arm construction.
 - `chained_transformer/data.py`, `chained_transformer/train.py`, `chained_transformer/evals.py`: entry points (`python -m ...`).
-- `tools/check.py`: the commit gate. `tools/gpu_equivalence.py`, `tools/gpu_smoke.py`: hardware lanes.
+- `chained_transformer/mix.py`: per-row switching statistics and the data mix policies.
+- `chained_transformer/optim.py`: `ChunkedAdamW8bit`. `chained_transformer/attention.py`: the fused-only attention. `chained_transformer/memory.py`: the training memory estimate.
+- `tools/check.py`: the commit gate. `tools/gpu_equivalence.py`, `tools/gpu_smoke.py`, `tools/memory_check.py`: hardware lanes. `tools/memtrace.py`: CPU live-bytes tracker. `tools/mode_probe.py`: linear probes for mode on base hidden states.
+- `docs/routing-and-looping.md`: design note on combining mode routing with looped layers.
 
 ## Rules
 

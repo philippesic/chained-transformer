@@ -49,7 +49,11 @@ attention and the KV cache untouched, which is why one cache serves every mode. 
 | `moe` | `MoEMLP`: E copies as experts, linear router, top-k softmax renormalised, Switch-style balance loss | 1,124.6M |
 
 All three start equal to the base model: copies are identical, LoRA B is zero, and MoE weights
-sum to one over identical experts.
+sum to one over identical experts. `MoEMLP` routes in fp32 and accumulates the weighted expert
+outputs in an fp32 buffer, casting to the model dtype once at the end. Combining in bf16 (the
+first version) rounded each weight, each product and each sum, so identical experts did not
+add back to the base output: on the 2080 Ti the bf16 `moe` arm's logits drifted 0.4 to 0.66 from
+the base model's while `full` matched exactly.
 
 The per-token mode index reaches the MLPs through a shared `Routing` object returned by
 `apply_surgery`: call `routing.set(mode_ids)` with a `[batch, seq]` tensor before each forward.
@@ -72,30 +76,70 @@ per-row mode trace. `TokenTexts` decodes each vocabulary id once.
 When the mode changes, the incoming model prefills every token it has not yet seen, then
 decodes. It reports switches and re-prefilled tokens.
 
-## Data (`chained_transformer/data.py`)
+## Data (`chained_transformer/data.py`, `chained_transformer/mix.py`)
 
-`python -m chained_transformer.data --rows N --shards S` reads the first `N/S` rows of `S` evenly spaced
-parquet shards of OpenThoughts3 directly from the Hub, renders the Qwen chat format by hand,
-tokenizes, labels position modes and writes an Arrow dataset with `input_ids` (int32),
-`mode_ids` and `loss_mask` (int8), domain, source and completeness flags, plus `stats.json`.
-The loss mask covers the assistant turn including `<|im_end|>`.
+`python -m chained_transformer.data` samples whole parquet row groups of OpenThoughts3 at random
+(weighted by rows, default 400 groups of 12 rows), renders the Qwen chat format by hand,
+tokenizes, labels position modes and profiles every row: domain, length, completeness, tokens
+per segment label, mode switches, where code fences fall and where the answer starts. It then
+picks the training rows with a mix policy and writes an Arrow dataset with `input_ids` (int32),
+`mode_ids` and `loss_mask` (int8), domain, source and completeness flags, plus `stats.json`
+(the sample's switching statistics, every candidate policy's token shares, the chosen policy)
+and `sample.jsonl` (a few rows shown as mode runs with short snippets). The loss mask covers the
+assistant turn including `<|im_end|>`. `--head` keeps the old layout (first rows of evenly
+spaced shards).
 
-The dataset is sorted by domain, so the first shard is all code; 16 shards give 3,000 math and
-1,000 code rows and no science rows. Many traces are cut off near 16k tokens; see the
-[slice result](../results/ot3-slice-composition/result.md).
+The dataset is sorted by domain (code shards first, science last), so reading the first rows of
+a few shards gives no science and a skewed code/math split; random row groups avoid that.
+
+Mix policies (`mix.CANDIDATES`) keep complete rows only and never truncate: a row longer than
+the policy's `max_tokens` is left out rather than cut, because truncation drops most `answer`
+tokens. `equal-domains-16k` (the default) gives code, math and science equal shares of loss
+tokens; `natural-16k` keeps the sample's own domain mix; `-8k` variants exist for the 11 GB
+card. Train at `--seq-len` equal to the policy's `max_tokens` so no row is truncated. The
+rebalance is by domain, because within a complete row `think` holds about 95% of loss tokens
+whatever the domain; see the [slice result](../results/ot3-slice-composition/result.md).
 
 ## Training (`chained_transformer/train.py`)
 
 One loop serves every arm: `--arm`, plus `--mode` for `separate` (loss only on that label) and
-`--only-mode` for single-mode retraining. Precision is bf16 weights with torchao `AdamW8bit`
-and bf16 stochastic rounding, which keeps tiny updates that plain bf16 rounding would drop.
-Activation checkpointing is on by default. The LM-head loss runs in checkpointed chunks, so a
-full 152k-vocabulary logits tensor is never stored. In the `lora` arm the base MLP weights are
+`--only-mode` for single-mode retraining. Precision is bf16 weights with an 8-bit AdamW and
+bf16 stochastic rounding, which keeps tiny updates that plain bf16 rounding would drop.
+Activation checkpointing is on by default. The LM-head loss runs in checkpointed chunks of 256
+tokens (`--loss-chunk`), so a full 152k-vocabulary logits tensor is never stored.
+
+Memory choices, all aimed at the 11 GB 2080 Ti (compute capability 7.5):
+
+- `--optimizer chunked` (default) is `optim.ChunkedAdamW8bit`: bitsandbytes-style blockwise
+  8-bit moments (blocks of 256, dynamic map), eager, updating each parameter in chunks of
+  `--optim-chunk` elements so its fp32 temporaries stay small. torchao's `AdamW8bit`
+  (`--optimizer torchao`) computes each parameter's update on the whole tensor; run without
+  `torch.compile` its 8-bit quantizer builds int64 code tensors, about 61 bytes of temporaries
+  per element of the 155.6M-element embedding (roughly 9 GB), which alone overflows the card.
+- `--attention auto` (default) registers `ct_fused_sdpa`: scaled-dot-product attention limited
+  to the flash, memory-efficient and cuDNN kernels. Below compute capability 8.0 no fused kernel
+  takes bf16, so PyTorch falls back to the math kernel, which stores the full fp32 score matrix
+  (about 1 GB per tensor at 4,096 tokens, several during backward). `ct_fused_sdpa` upcasts q, k
+  and v to fp32 there instead, which the memory-efficient kernel accepts. If no fused kernel
+  fits, it falls back to math with a warning and counts it in `summary.json`
+  (`attention_math_fallbacks`).
+- `PYTORCH_ALLOC_CONF=expandable_segments:True` is set unless already set, so freed attention
+  and loss buffers do not leave the cache fragmented around the gradients allocated amid them.
+- `--freeze-embeddings` freezes the tied embedding/LM head (155.6M parameters), saving its
+  gradient and optimizer state.
+
+`chained_transformer/memory.py` estimates each arm's memory by phase (weights, gradients,
+optimizer state, saved activations, layer backward, loss backward, optimizer step) for the
+current and the fixed harness: `python -m chained_transformer.memory --harness fixed --seq-len
+4096 8192 16384`. Its per-element coefficients are guesses until `tools.memory_check` measures
+them (CPU with a tracking dispatch mode, or CUDA with per-phase peak stats). In the `lora` arm the base MLP weights are
 frozen and the trunk trains; in `full` and `moe` everything trains. Each step logs total loss,
 loss by segment label, MoE balance loss, gradient norm, step time and peak memory to
 `train.jsonl`; `summary.json` holds the median step time, tokens/s and peak memory.
 
-Rows are currently truncated to their first `--seq-len` tokens, one row per micro-batch.
+Rows longer than `--seq-len` are still truncated (counted as `truncated_rows` in `train.jsonl`);
+build data with a policy whose `max_tokens` matches `--seq-len` to avoid that. One row per
+micro-batch.
 Checkpoint saving is not implemented yet.
 
 ## Evals (`chained_transformer/evals.py`)

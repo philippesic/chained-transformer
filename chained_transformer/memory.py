@@ -76,7 +76,8 @@ class Coefficients:
     layer_backward: float = 1.6
     math_attn: float = 12.0
     loss_bytes_per_logit: float = 14.0
-    torchao_eager_temps: float = 7.0
+    torchao_eager_temps: float = 61.0
+    torchao_compiled_temps: float = 8.0
     chunked_temps: float = 40.0
 
 
@@ -184,9 +185,9 @@ def loss_bytes(shape: ModelShape, setup: Setup, k: Coefficients) -> float:
 def optimizer_temp_bytes(tensors: list[Tensor], setup: Setup, k: Coefficients) -> float:
     largest = max((t.numel for t in tensors if t.trainable), default=0)
     if setup.optimizer == "torchao-eager":
-        return k.torchao_eager_temps * 4.0 * largest
+        return k.torchao_eager_temps * largest
     if setup.optimizer == "torchao-compiled":
-        return 4.0 * largest
+        return k.torchao_compiled_temps * largest
     return k.chunked_temps * min(largest, setup.optim_chunk)
 
 

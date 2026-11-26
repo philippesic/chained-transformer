@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import torch
@@ -14,6 +15,9 @@ FUSED_BACKENDS = [
     SDPBackend.EFFICIENT_ATTENTION,
     SDPBackend.CUDNN_ATTENTION,
 ]
+
+
+FALLBACKS: list[str] = []
 
 
 def needs_fp32(t: torch.Tensor) -> bool:
@@ -42,19 +46,31 @@ def fused_sdpa(
         query, key, value = query.float(), key.float(), value.float()
         if attention_mask is not None and attention_mask.is_floating_point():
             attention_mask = attention_mask.float()
+    q_len = query.shape[2]
     if is_causal is None:
-        is_causal = attention_mask is None and query.shape[2] > 1
-        is_causal = is_causal and bool(getattr(module, "is_causal", True))
-    with sdpa_kernel(FUSED_BACKENDS):
-        out = F.scaled_dot_product_attention(
-            query,
-            key,
-            value,
-            attn_mask=attention_mask,
-            dropout_p=dropout if module.training else 0.0,
-            scale=scaling,
-            is_causal=is_causal,
-        )
+        is_causal = bool(getattr(module, "is_causal", True))
+    is_causal = q_len > 1 and attention_mask is None and is_causal
+    if is_causal and key.shape[2] > q_len:
+        key, value = key[:, :, :q_len], value[:, :, :q_len]
+    args = (query, key, value)
+    kwargs_sdpa = {
+        "attn_mask": attention_mask,
+        "dropout_p": dropout if module.training else 0.0,
+        "scale": scaling,
+        "is_causal": is_causal,
+    }
+    if not query.is_cuda:
+        out = F.scaled_dot_product_attention(*args, **kwargs_sdpa)
+    else:
+        try:
+            with sdpa_kernel(FUSED_BACKENDS):
+                out = F.scaled_dot_product_attention(*args, **kwargs_sdpa)
+        except RuntimeError as err:
+            reason = f"{tuple(query.shape)} {query.dtype} mask={attention_mask is not None}: {err}"
+            if not FALLBACKS:
+                warnings.warn(f"fused attention fell back to math: {reason}", stacklevel=2)
+            FALLBACKS.append(reason)
+            out = F.scaled_dot_product_attention(*args, **kwargs_sdpa)
     return out.to(dtype).transpose(1, 2).contiguous(), None
 
 

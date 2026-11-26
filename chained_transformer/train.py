@@ -20,7 +20,12 @@ from torch.optim import Optimizer
 from torch.utils.checkpoint import checkpoint
 from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 
-from chained_transformer.attention import ATTENTION_CHOICES, attention_backend, use_attention
+from chained_transformer.attention import (
+    ATTENTION_CHOICES,
+    FALLBACKS,
+    attention_backend,
+    use_attention,
+)
 from chained_transformer.model import ARMS, BASE_MODEL, Arm, build, load_base, param_counts
 from chained_transformer.modes import MODE_NAMES, Mode
 from chained_transformer.optim import DEFAULT_CHUNK, ChunkedAdamW8bit
@@ -305,6 +310,7 @@ def main(argv: list[str] | None = None, on_phase: PhaseHook | None = None) -> No
         "device": torch.cuda.get_device_name(device) if on_gpu else "cpu",
         "optimizer": args.optimizer,
         "attention": attention_backend(model),
+        "attention_math_fallbacks": len(FALLBACKS),
     }
     (args.out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print("training complete", json.dumps(summary))
