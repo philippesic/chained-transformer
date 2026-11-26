@@ -42,6 +42,7 @@ class Generation:
     tokens_by_mode: dict[str, int]
     switches: int
     reprefilled_tokens: int = 0
+    mode_runs: list[list[int]] = field(default_factory=list)
 
 
 @dataclass
@@ -122,6 +123,16 @@ def labels_of(position_modes: Sequence[int]) -> dict[str, int]:
     return {MODE_NAMES[m]: sum(1 for x in position_modes if x == m) for m in Mode}
 
 
+def runs_of(labels: Sequence[int]) -> list[list[int]]:
+    runs: list[list[int]] = []
+    for m in labels:
+        if runs and runs[-1][0] == m:
+            runs[-1][1] += 1
+        else:
+            runs.append([int(m), 1])
+    return runs
+
+
 def switches_of(labels: Sequence[int]) -> int:
     return sum(1 for a, b in zip(labels, labels[1:], strict=False) if a != b)
 
@@ -184,6 +195,7 @@ def _generate_batch(
                 finished,
                 labels_of(labels),
                 switches_of(labels),
+                mode_runs=runs_of(labels),
             )
         )
     return results
@@ -209,6 +221,7 @@ def _generate_separate(
         labels_of(labels),
         switches_of(labels),
         res.reprefilled_tokens,
+        runs_of(labels),
     )
 
 

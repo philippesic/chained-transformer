@@ -100,6 +100,8 @@ def test_model_run_writes_consistent_report(
         assert bench["modes"]["n"] == 2 and bench["leakage"]["n"] == 2
         for row in read_jsonl(tmp_path / name / "responses.jsonl"):
             assert sum(row["tokens_by_mode"].values()) == row["new_tokens"] <= 12
+            assert sum(n for _, n in row["mode_runs"]) == row["new_tokens"]
+            assert len(row["mode_runs"]) == row["switches"] + 1
         assert len(read_jsonl(tmp_path / name / "scores.jsonl")) == 2
 
 
