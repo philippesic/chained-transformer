@@ -101,7 +101,9 @@ uv run --locked --no-sync python -m evals.run --model <checkpoint or Hub name> \
   `find_zero` oracle never records a pass), so 163/164 is the ceiling for every arm. Details in
   `results/eval-scorer-checks/`.
 - CLI plumbing: a tiny random mode checkpoint with a toy tokenizer (`tools/tiny_checkpoint.py`)
-  through generation, mode tracking, scoring, `--score-only` and the separate arm.
+  through generation, mode tracking, scoring, `--score-only` and the separate arm. The toy
+  tokenizer keeps `<think>` and `</think>` when decoding, as Qwen3's is believed to (not checked
+  here), so CPU runs score responses whose thinking closed.
 
 ## Blocked here, and the defaults taken
 
@@ -139,7 +141,10 @@ uv run --locked --no-sync python -m evals.run --model <checkpoint or Hub name> \
 - `tools/eval_power.py --odds` gives the chance of each verdict by true gap. Because every seed
   must clear 2 points, a true 2-point gap continues about 11% of the time at any sample size
   (each seed is a coin flip on each margin), a 4-point gap about 86% at the planned standard
-  error, and a third seed makes the rule stricter rather than more sensitive.
+  error, and a third seed makes the rule stricter rather than more sensitive. Its last columns
+  give the rule the sample was sized for, both seed-mean margins clearing a one-sided 5% test:
+  about 69% at a true 2-point gap with two seeds and 86% with three. Training noise between
+  seeds raises that rule's false continues, since its line counts only sampling error.
 - The pilot defaults to the verdict eval set: `sft`, `full`, `lora` and `moe` on a per-benchmark
   sample sized by `tools/eval_power.py` for a 2-point gap at two seeds, assuming the arms
   disagree on 10% of problems (361 MATH500, all 164 HumanEval+, 361 LiveCodeBench). After each
