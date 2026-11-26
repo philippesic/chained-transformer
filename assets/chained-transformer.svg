@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">chained-transformer</title>
+  <desc id="desc">Three dots joined in a chain on a violet-to-teal gradient tile.</desc>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7c5cff"/>
+      <stop offset="0.55" stop-color="#c0569f"/>
+      <stop offset="1" stop-color="#f59e0b"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="url(#tile)"/>
+  <path d="M 15 45 L 32 32 L 49 19" fill="none" stroke="#ffffff" stroke-opacity="0.55" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="15" cy="45" r="7.5" fill="#ffffff"/>
+  <circle cx="32" cy="32" r="7.5" fill="#ffffff"/>
+  <circle cx="49" cy="19" r="7.5" fill="#ffffff"/>
+</svg>

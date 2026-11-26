@@ -1,11 +1,12 @@
-# mode-routed-mlp
+# chained-transformer
 
 Research code for a Qwen3 transformer with one shared trunk and KV cache and several MLP
 modes (think, code, answer) that the model switches between mid-answer. The
 [README](README.md) states the idea, prior art and experiment plan.
 
-Checkout: `/home/philip/mode-routed-mlp` on the RTX 5080 host. Local only: no remote, do not
-push or publish until Philip says so.
+Checkout: `/home/philip/chained-transformer` on the RTX 5080 host. A plain copy (rsync, not a
+Git remote) sits at the same path on the RTX 2080 Ti host, SSH alias `pstack-2080`; it does not
+sync itself. Local only: no remote, do not push or publish until Philip says so.
 
 ## Navigation
 

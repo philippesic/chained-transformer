@@ -1,4 +1,6 @@
-# mode-routed-mlp
+# chained-transformer
+
+<img src="assets/chained-transformer.svg" width="64" height="64" alt="">
 
 A decoder-only transformer whose attention, embeddings, norms and LM head are shared, while
 every layer holds several MLP sets called **modes**: `think`, `code` and `answer`. The model
