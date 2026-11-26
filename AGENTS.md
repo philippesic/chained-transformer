@@ -15,6 +15,7 @@ elsewhere without asking.
 - [Design](docs/design.md): terms (mode, position mode, segment label, trunk, arm, complete
   row) and how tracking, surgery, generation, data, training and evals work.
 - [Development](docs/development.md): environment, check lanes, GPU sharing, conventions.
+- [Data](docs/data.md): the data pipeline step by step, mix policies and every output field.
 - [Tasks](tasks/README.md): unfinished-work convention. Active: [first experiment](tasks/first-experiment.md); [cloud/harness runbook](tasks/runbook-cloud-harness.md) for its first GPU runs.
 - [FINDINGS](FINDINGS.md): index of results in `results/`.
 

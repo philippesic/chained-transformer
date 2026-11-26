@@ -78,6 +78,8 @@ decodes. It reports switches and re-prefilled tokens.
 
 ## Data (`chained_transformer/data.py`, `chained_transformer/mix.py`)
 
+Step by step, with every output field: [data.md](data.md).
+
 `python -m chained_transformer.data` samples whole parquet row groups of OpenThoughts3 at random
 (weighted by rows, default 400 groups of 12 rows), reads only the rows it needs but must fetch
 each chosen row group whole, so it prints the compressed size first and stops adding groups at

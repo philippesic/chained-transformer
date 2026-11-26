@@ -126,6 +126,8 @@ On the 5080:
 uv run --locked --no-sync python -m chained_transformer.data --policy equal-domains-16k
 ```
 
+Stage by stage, with every output field: [docs/data.md](../docs/data.md).
+
 ## 4. Probes and design note
 
 - `tools/mode_probe.py`: logistic probes on base Qwen3-0.6B hidden states per layer, for
@@ -146,6 +148,8 @@ the math kernel. Tests added (unrun): the optimizer gives bit-identical params a
 uneven last chunk (quantized, small and large-but-unquantizable tensors), per-token losses do
 not depend on the loss chunk, `make_batch` cuts long rows correctly, and the memory check's
 verdict. Checked and fine: the MoE router has no bias, so routing without it is correct.
+The memory check also refuses to measure while another process holds the GPU (exit 2, as
+`tools.gpu_smoke` does), since that process's memory would count against every arm.
 
 ## Measured versus estimated
 
