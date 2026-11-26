@@ -124,6 +124,10 @@ def collect_traces(worker: Any) -> dict[str, Any]:
     }
 
 
+def _name(value: Any) -> str:
+    return str(getattr(value, "name", value))
+
+
 def runner_report(worker: Any) -> dict[str, Any]:
     import vllm
 
@@ -142,7 +146,7 @@ def runner_report(worker: Any) -> dict[str, Any]:
         "stacking_problems": problems,
         "weights_device": str(first.device) if first is not None else None,
         "weights_dtype": str(first.dtype) if first is not None else None,
-        "compilation_mode": str(config.compilation_config.mode),
-        "cudagraph_mode": str(config.compilation_config.cudagraph_mode),
+        "compilation_mode": _name(config.compilation_config.mode),
+        "cudagraph_mode": _name(config.compilation_config.cudagraph_mode),
         "enforce_eager": config.model_config.enforce_eager,
     }

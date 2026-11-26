@@ -510,6 +510,8 @@ def test_runner_report_checks_stacked_weights(
 ) -> None:
     from types import SimpleNamespace
 
+    from vllm.config import CompilationMode
+
     from serving.vllm_plugin.model import VllmModeMLP
     from serving.vllm_plugin.state import ModeModelState, runner_report
 
@@ -522,6 +524,8 @@ def test_runner_report_checks_stacked_weights(
     assert report["model_state"] == "ModeModelState"
     assert report["mode_mlps"] == 2
     assert report["stacking_problems"] == []
+    assert report["compilation_mode"] in {m.name for m in CompilationMode}
+    assert report["cudagraph_mode"] == "NONE"
     mlp = next(m for m in model.modules() if isinstance(m, VllmModeMLP))
     weight = mlp.modes[1].get_parameter("down_proj.weight")
     saved = weight.data

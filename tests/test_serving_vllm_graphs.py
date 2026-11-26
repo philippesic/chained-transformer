@@ -82,7 +82,8 @@ def test_graphs_are_on_and_weights_are_stacked(llm: Any) -> None:
     assert report["stacking_problems"] == [], report
     assert report["weights_device"].startswith("cuda"), report
     assert not report["enforce_eager"], report
-    assert report["cudagraph_mode"] != "CUDAGraphMode.NONE", report
+    assert report["compilation_mode"] == "VLLM_COMPILE", report
+    assert report["cudagraph_mode"] != "NONE", report
 
 
 @pytest.mark.parametrize("count", [len(TINY_PROMPTS), 1, 3])
