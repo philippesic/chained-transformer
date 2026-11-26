@@ -554,6 +554,82 @@ def test_runner_report_checks_stacked_weights(
         weight.data = saved
 
 
+def test_mode_state_lists_untested_vllm_features() -> None:
+    from types import SimpleNamespace
+
+    from serving.vllm_plugin.state import unsupported_features
+
+    def config(spec: Any = None, ubatch: bool = False, pp: int = 1) -> Any:
+        parallel = SimpleNamespace(use_ubatching=ubatch, pipeline_parallel_size=pp)
+        return SimpleNamespace(speculative_config=spec, parallel_config=parallel)
+
+    assert unsupported_features(config()) == []
+    found = unsupported_features(config(spec=object(), ubatch=True, pp=2))
+    assert [f.split(" ")[0] for f in found] == ["speculative", "micro-batching", "pipeline"]
+    assert "mode_ids" in found[1]
+
+
+def test_mode_state_refuses_speculative_decoding(
+    vllm_model: tuple[Any, Any, dict[str, torch.Tensor]],
+) -> None:
+    import copy
+    from types import SimpleNamespace
+
+    from serving.vllm_plugin.state import ModeModelState
+
+    config, model, _ = vllm_model
+    assert config.speculative_config is None
+    ModeModelState(config, model, None, torch.device("cpu"))
+    drafted = copy.copy(config)
+    object.__setattr__(drafted, "speculative_config", SimpleNamespace(num_speculative_tokens=2))
+    with pytest.raises(NotImplementedError, match="speculative decoding"):
+        ModeModelState(drafted, model, None, torch.device("cpu"))
+
+
+def test_set_mlp_impl_refuses_a_compiled_engine(
+    vllm_model: tuple[Any, Any, dict[str, torch.Tensor]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    from serving.vllm_plugin.state import set_mlp_impl
+
+    config, model, _ = vllm_model
+    eager = SimpleNamespace(model_runner=SimpleNamespace(vllm_config=config, model=model))
+    assert set_mlp_impl(eager, "select") == 2
+    for mode, graphs in (("VLLM_COMPILE", "NONE"), ("NONE", "FULL")):
+        compilation = SimpleNamespace(
+            mode=SimpleNamespace(name=mode), cudagraph_mode=SimpleNamespace(name=graphs)
+        )
+        compiled = SimpleNamespace(
+            model_runner=SimpleNamespace(
+                vllm_config=SimpleNamespace(compilation_config=compilation), model=model
+            )
+        )
+        with pytest.raises(RuntimeError, match="change nothing"):
+            set_mlp_impl(compiled, "triton")
+    with pytest.raises(ValueError, match="must be one of"):
+        set_mlp_impl(eager, "grouped")
+    mlps = [m for m in model.modules() if hasattr(m, "stack_weights")]
+    for mlp in mlps:
+        monkeypatch.setattr(mlp, "tensor_parallel", 2)
+    with pytest.raises(ValueError, match="tensor-parallel"):
+        set_mlp_impl(eager, "triton")
+    assert set_mlp_impl(eager, "loop") == 2
+    assert set_mlp_impl(eager, "select") == 2
+    assert {m.impl for m in mlps} == {"select"}
+
+
+def test_impl_problem_names_what_each_impl_cannot_serve() -> None:
+    from serving.vllm_plugin.model import impl_problem
+
+    assert impl_problem("select", quantized=True, tensor_parallel=4) is None
+    assert impl_problem("loop", quantized=False, tensor_parallel=2) is None
+    assert impl_problem("triton", quantized=False, tensor_parallel=1) is None
+    assert "must be one of" in (impl_problem("grouped", False, 1) or "")
+    assert "unquantized" in (impl_problem("triton", True, 1) or "")
+    assert "tensor-parallel" in (impl_problem("triton", False, 2) or "")
+
+
 @pytest.mark.parametrize("impl", IMPLS)
 def test_hand_driven_engine_matches_hf_greedy(
     vllm_model: tuple[Any, Any, dict[str, torch.Tensor]],

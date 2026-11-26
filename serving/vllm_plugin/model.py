@@ -8,7 +8,7 @@ import torch
 from torch import nn
 from vllm.compilation.decorators import support_torch_compile
 from vllm.config import VllmConfig
-from vllm.distributed import get_pp_group
+from vllm.distributed import get_pp_group, get_tensor_model_parallel_world_size
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
 from vllm.model_executor.layers.vocab_parallel_embedding import ParallelLMHead
 from vllm.model_executor.models.qwen2 import Qwen2Model
@@ -16,7 +16,7 @@ from vllm.model_executor.models.qwen3 import Qwen3DecoderLayer, Qwen3ForCausalLM
 from vllm.model_executor.models.utils import PPMissingLayer, maybe_prefix
 from vllm.sequence import IntermediateTensors
 
-from serving.export import tracking_settings
+from serving.export import MLP_IMPLS, tracking_settings
 from serving.mixed import StackedWeights
 
 
@@ -36,16 +36,34 @@ def _grouped_mode_mlp_fake(
     return torch.empty_like(x)
 
 
+def impl_problem(impl: str, quantized: bool, tensor_parallel: int) -> str | None:
+    if impl not in MLP_IMPLS:
+        return f"mlp_impl must be one of {MLP_IMPLS}, got {impl!r}"
+    if impl != "triton":
+        return None
+    if quantized:
+        return (
+            "mlp_impl 'triton' reads unquantized stacked weights; serve a quantized "
+            "checkpoint with mlp_impl 'select'"
+        )
+    if tensor_parallel > 1:
+        return (
+            "mlp_impl 'triton' does not all-reduce across tensor-parallel ranks; serve on one "
+            "GPU or with mlp_impl 'select'"
+        )
+    return None
+
+
 class VllmModeMLP(nn.Module):
     def __init__(
         self, config: Any, quant_config: Any, prefix: str, num_modes: int, impl: str
     ) -> None:
         super().__init__()
-        if impl == "triton" and quant_config is not None:
-            raise NotImplementedError(
-                "mlp_impl 'triton' reads unquantized stacked weights; serve a quantized "
-                "checkpoint with mlp_impl 'select'"
-            )
+        self.quantized = quant_config is not None
+        self.tensor_parallel = get_tensor_model_parallel_world_size()
+        problem = impl_problem(impl, self.quantized, self.tensor_parallel)
+        if problem is not None:
+            raise NotImplementedError(problem)
         self.modes = nn.ModuleList(
             Qwen3MLP(
                 hidden_size=config.hidden_size,

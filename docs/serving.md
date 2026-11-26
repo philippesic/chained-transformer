@@ -139,12 +139,14 @@ per mode, which stack into MoE's `w13 [M, 2I, H]` and `w2 [M, H, I]` layout.
   serving routing identical to training routing.
 - Each slot records its owner `req_id` and `fed`, the number of tokens already fed. In
   `prepare_inputs`, for every row whose `req_id` owns its slot: if `fed` is past the row's
-  first scheduled position (spec-decode rejection), rebuild the tracker and re-feed the tokens
-  the slot already knows (its prefill tokens and every token fed since); if it is behind
-  (prefix-cache hit), feed the known tokens up to that position. Then feed the row's scheduled
-  tokens and write their position modes. Rows that do not own their slot (dummy runs) get
-  mode 0 and leave trackers alone. A ring of tracker snapshots would make rollback cheaper; it
-  is not built.
+  first scheduled position, rebuild the tracker and re-feed the tokens the slot already knows
+  (its prefill tokens and every token fed since); if it is behind (prefix-cache hit), feed the
+  known tokens up to that position. Then feed the row's scheduled tokens and write their
+  position modes. Rows that do not own their slot (dummy runs) get mode 0 and leave trackers
+  alone. The rebuild was meant for spec-decode rejection, but vLLM's spec decode hands the host
+  tokens before they are accepted, so the plugin refuses speculative decoding at engine start
+  (with micro-batching and pipeline parallelism, which it also cannot route); the rebuild stays
+  as a guard.
 - Position mode of token `p` is the tracker state after reading token `p`, matching the
   Hugging Face hook and the training labels.
 - Chunked prefill feeds chunks in order; resume re-seeds from `prefill_token_ids`.
@@ -191,3 +193,6 @@ several decode steps, so un-overlapped paging would be visible on every switch.
 ## Status
 
 See [serving notes](serving-notes.md) for what is verified, where, and what is not.
+[serving-plugin.md](serving-plugin.md) is the guide to using the plugin.
+[demo-mode-swap.md](demo-mode-swap.md) has the commands for the one-cache demo against
+separate models on the 2080 Ti and the 5080.
