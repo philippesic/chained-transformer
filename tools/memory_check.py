@@ -225,6 +225,21 @@ def compare(shape: ModelShape, result: dict[str, Any]) -> dict[str, Any]:
     return rows
 
 
+def judge(
+    result: dict[str, Any], rows: dict[str, Any], budget_gib: float | None
+) -> tuple[bool | None, str]:
+    measured = result["measured"]
+    fallbacks = result.get("train_summary", {}).get("attention_math_fallbacks", 0)
+    note = f"  attention fell back to math {fallbacks}x" if fallbacks else ""
+    if measured.get("status", "ok") != "ok":
+        return False, f"OUT OF MEMORY in {measured.get('oom_phase')}{note}"
+    if budget_gib is None:
+        return None, note.strip()
+    peak = max(rows["peak"]["measured_gib"], measured.get("reserved_peak_gib", 0.0))
+    fits = peak <= budget_gib
+    return fits, ("fits" if fits else "OVER") + note
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Measure training memory per arm and compare")
     parser.add_argument("--device", default="cpu")
@@ -287,16 +302,9 @@ def main() -> int:
                 result = json.loads(result_path.read_text())
                 rows = compare(shape, result)
                 entry = {"arm": arm, "seq_len": seq, **result, "comparison": rows}
-                verdict = ""
-                if args.budget_gib is not None:
-                    peak = max(
-                        rows["peak"]["measured_gib"],
-                        result["measured"].get("reserved_peak_gib", 0.0),
-                    )
-                    status = result["measured"].get("status", "ok")
-                    fits = status == "ok" and peak <= args.budget_gib
+                fits, verdict = judge(result, rows, args.budget_gib)
+                if fits is not None:
                     entry["fits_budget"] = fits
-                    verdict = "fits" if fits else "OVER"
                 report.append(entry)
                 print(
                     f"{arm:<9}{seq:>7}  measured {rows['peak']['measured_gib']:.2f} GiB"
