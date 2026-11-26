@@ -89,6 +89,36 @@ checks the 0.6B shape against the published counts; the generated configs and co
 `configs/qwen3-0.6b/` and `configs/qwen3-1.7b/`. `mode_slice(model, m)` returns one mode's
 tensors, for single-mode upgrades.
 
+## Single-mode upgrades (`chained_transformer/upgrade.py`)
+
+A mode pack is one mode's tensors (`mode.safetensors`) plus `mode.json`: the mode, the variant,
+the parameter count and a trunk fingerprint, a SHA-256 over every parameter that belongs to no
+mode. `retrain_mode` freezes everything except one mode (`full` copies or `lora` adapters; `moe`
+has no per-mode parameters) and trains it on rows in the dataset format, with loss on that
+mode's tokens only (`loss_on="mode"`, the default) or on every token. `swap_mode` copies a pack
+into a model after checking variant, mode, trunk fingerprint, tensor names and shapes, so a
+pack trained on one trunk cannot be dropped silently into another.
+
+`measure` reports per-label loss and token accuracy and, given a reference model, the KL from
+it and the largest log-probability change. Each label is split at the first code position:
+before it the code MLP has not run, so a code upgrade must leave those positions bit-identical,
+and the split shows whether anything leaks. After it, `think` and `answer` can still move,
+because later layers attend to hidden states the new code MLP produced; that drift is what an
+upgrade has to keep small.
+
+On a GPU host, with a trained checkpoint and a dataset slice:
+
+```sh
+python -m chained_transformer.upgrade retrain --checkpoint CKPT --data DATA --mode code --steps 200 --out PACK
+python -m chained_transformer.upgrade swap --checkpoint CKPT --pack PACK --out CKPT-upgraded
+python -m chained_transformer.upgrade measure --checkpoint CKPT-upgraded --reference CKPT --data DATA --limit 200 --out measure.json
+```
+
+`retrain` uses the same 8-bit AdamW with bf16 stochastic rounding as training when it runs in
+bf16 on CUDA, and writes `train.jsonl` next to the pack. Then run `evals.run` on the upgraded
+checkpoint. `tools/upgrade_demo.py` runs the whole idea on a tiny synthetic task on CPU; see
+[results/upgrade-demo](../results/upgrade-demo/result.md).
+
 ## Generation (`chained_transformer/generate.py`)
 
 `mode_tracking(model, routing, texts)` registers a forward pre-hook. On prefill it starts one
