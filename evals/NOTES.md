@@ -106,6 +106,10 @@ uv run --locked --no-sync python -m evals.run --model <checkpoint or Hub name> \
 - The pilot trains through `train.main`'s `on_model` hook, which exists only on `cloud/harness`.
   On a tree with both branches merged, a 7-run tiny pilot on CPU trained, saved, evaluated and
   compared end to end.
+- `tools/pilot_report.py` turns a finished pilot into the paper's Tables 1, 2, 4 and 5 and the
+  kill-rule verdict (from `pilot.verdict`), tested on fake reports and run on the tiny CPU pilot.
+  Its notes flag missing reports, smoke limits, CPU timings, and a `separate` arm decoded at
+  batch 1 next to batched mode arms, which makes Table 5's tokens/s compare batch sizes.
 - `evals/switch_stats.py` reads `mode_runs`, which responses record from this branch on; older
   `responses.jsonl` files count as responses without a trace.
 

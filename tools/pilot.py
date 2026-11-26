@@ -408,13 +408,18 @@ def verdict(table: dict[str, dict[int, dict[str, float]]], seeds: list[int]) -> 
     }
 
 
-def cmd_compare(args: argparse.Namespace) -> None:
-    cfg, _, evals = load_plan(args.root)
+def score_table(root: Path, evals: list[EvalRun]) -> dict[str, dict[int, dict[str, float]]]:
     table: dict[str, dict[int, dict[str, float]]] = {}
     for e in evals:
-        scores = eval_scores(args.root, e.id)
+        scores = eval_scores(root, e.id)
         if scores is not None:
             table.setdefault(e.arm, {})[e.seed] = scores
+    return table
+
+
+def cmd_compare(args: argparse.Namespace) -> None:
+    cfg, _, evals = load_plan(args.root)
+    table = score_table(args.root, evals)
     result = {
         "pilot": cfg.name,
         "scores_points": {a: {str(s): v for s, v in by.items()} for a, by in table.items()},

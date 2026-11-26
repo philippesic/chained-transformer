@@ -94,6 +94,9 @@ Evidence against, which the paper has to answer head-on:
 - **Figure 1:** the architecture with one cache and per-mode MLPs. **Figure 2:** a real response
   coloured by mode. **Figure 3:** pass rate against number of switches, per arm.
 
+`python -m tools.pilot_report --root artifacts/pilot/NAME` prints Tables 1, 2, 4 and 5, the pass
+rate by switches for Figure 3 and the kill-rule verdict, and writes `results.md` and `results.json`.
+
 ## Threats to validity
 
 - Equal tokens is not equal parameters: `full` holds 1.89 times the base parameters with the
