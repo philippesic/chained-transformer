@@ -65,6 +65,24 @@ uv run --locked --no-sync pytest -q -p no:cacheprovider
 A failing test in `test_optim.py`, `test_attention.py` or the MoE tests in `test_surgery.py`
 does block them, because those are the pieces the GPU steps rely on. Keep the output.
 
+## 1b. 2080 Ti: GPU unit tests
+
+```sh
+uv run --locked --no-sync pytest -m gpu -q -p no:cacheprovider
+```
+
+These run on tiny random models, so they need no download. On CUDA they check fused attention
+in bf16 and fp32 with no fallback to math, the 8-bit optimizer against its CPU result,
+unbiased bf16 rounding, that an optimizer step's temporaries stay within one chunk, that MoE
+with checkpointing frees its recomputed activations, and three steps of each arm.
+
+Pass: every test passes.
+
+If it fails: unlike the other steps, go on to step 2 anyway, because its numbers show what the
+failure costs. Keep the output. A failing attention test, or `attention_math_fallbacks` above 0
+in the arm tests, means the fused kernel refused these shapes; the assertion prints its error.
+A failing MoE memory test means the `moe` rows of steps 2, 3 and 6 will read high.
+
 ## 2. 2080 Ti: memory at 4k and 8k (must fit)
 
 ```sh
@@ -193,8 +211,12 @@ rerun with `--freeze-embeddings`; if that fits, 16k training on this card needs 
 ## 10. 5080, when the GPU is free: GPU smoke
 
 ```sh
+uv run --locked --no-sync pytest -m gpu -q -p no:cacheprovider
 uv run --locked --no-sync python -m tools.gpu_smoke --data artifacts/data/ot3-mix
 ```
+
+The first line repeats step 1b on this card, which takes different attention kernels; its
+pass and fail read as there.
 
 Without step 7's data, leave `--data` off to use the old `ot3-slice-4k`. Pass: every step
 prints `ok`, `smoke.json` under `artifacts/smoke/<timestamp>/` has every `passed` entry true,

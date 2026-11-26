@@ -159,6 +159,10 @@ backward) and tested. Smaller fixes: a fused-kernel out-of-memory error no longe
 the math kernel, `--only-mode` is refused for arms without per-mode weights, MoE top-k above
 the expert count is refused, and three small device and path fixes. Commit `4fdb4be` lists them.
 
+`tests/test_gpu.py` (marked `gpu`, so `tools.check` skips it) turns the claims that only a GPU
+can check into tests: fused attention with no math fallback, the 8-bit optimizer on CUDA,
+the MoE checkpoint fix's memory, and three steps of each arm. Runbook step 1b runs it.
+
 ## Measured versus estimated
 
 - Measured: nothing on torch. The mix logic (5 tests), the memory check's verdict (3 tests)
