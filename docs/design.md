@@ -79,7 +79,9 @@ decodes. It reports switches and re-prefilled tokens.
 ## Data (`chained_transformer/data.py`, `chained_transformer/mix.py`)
 
 `python -m chained_transformer.data` samples whole parquet row groups of OpenThoughts3 at random
-(weighted by rows, default 400 groups of 12 rows), renders the Qwen chat format by hand,
+(weighted by rows, default 400 groups of 12 rows), reads only the rows it needs but must fetch
+each chosen row group whole, so it prints the compressed size first and stops adding groups at
+`--max-download-gb` (default 6). It renders the Qwen chat format by hand,
 tokenizes, labels position modes and profiles every row: domain, length, completeness, tokens
 per segment label, mode switches, where code fences fall and where the answer starts. It then
 picks the training rows with a mix policy and writes an Arrow dataset with `input_ids` (int32),

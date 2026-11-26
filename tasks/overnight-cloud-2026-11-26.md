@@ -106,7 +106,9 @@ bf16 `moe` arm's logits stay as close to the base model's as the `full` arm's.
 `python -m chained_transformer.data` now samples 400 random parquet row groups (12 rows each)
 instead of the first rows of a few shards, profiles every row (switches per trace, tokens per
 mode, where code fences fall, where the answer starts, length) and selects training rows with
-a mix policy. It writes the dataset, `stats.json` (switching statistics, each candidate
+a mix policy. Each sampled row group is fetched whole, so it prints the compressed download first
+and caps it at `--max-download-gb` (default 6; the row-group size of the OpenThoughts3 shards is
+unknown here). It writes the dataset, `stats.json` (switching statistics, each candidate
 policy's token shares) and `sample.jsonl`. Not run: it needs Hugging Face.
 
 Length policy, proposed: complete rows only, never truncate, and leave out rows longer than

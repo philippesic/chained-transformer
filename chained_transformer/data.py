@@ -87,6 +87,7 @@ class RowGroup:
     path: str
     index: int
     rows: int
+    compressed_bytes: int = 0
 
 
 def all_row_groups(fs: Any) -> list[RowGroup]:
@@ -94,13 +95,31 @@ def all_row_groups(fs: Any) -> list[RowGroup]:
     for path in shard_files(DATASET_SHARDS):
         with fs.open(path, "rb", block_size=1 << 20) as handle:
             meta = pq.ParquetFile(handle).metadata
-            groups += [
-                RowGroup(path, i, meta.row_group(i).num_rows) for i in range(meta.num_row_groups)
-            ]
+            for i in range(meta.num_row_groups):
+                group = meta.row_group(i)
+                size = sum(
+                    group.column(j).total_compressed_size
+                    for j in range(group.num_columns)
+                    if group.column(j).path_in_schema.split(".")[0] in COLUMNS
+                )
+                groups.append(RowGroup(path, i, group.num_rows, size))
     return groups
 
 
-def sample_row_groups(groups: list[RowGroup], count: int, seed: int) -> list[RowGroup]:
+def cap_download(groups: list[RowGroup], max_bytes: int) -> list[RowGroup]:
+    kept: list[RowGroup] = []
+    total = 0
+    for g in groups:
+        if total + g.compressed_bytes > max_bytes and kept:
+            break
+        kept.append(g)
+        total += g.compressed_bytes
+    return kept
+
+
+def sample_row_groups(
+    groups: list[RowGroup], count: int, seed: int, max_bytes: int | None = None
+) -> list[RowGroup]:
     rng = random.Random(seed)
     picked = rng.choices(groups, weights=[g.rows for g in groups], k=min(count, len(groups)) * 4)
     unique: list[RowGroup] = []
@@ -109,6 +128,8 @@ def sample_row_groups(groups: list[RowGroup], count: int, seed: int) -> list[Row
             unique.append(g)
         if len(unique) == count:
             break
+    if max_bytes is not None:
+        unique = cap_download(unique, max_bytes)
     return sorted(unique, key=lambda g: (g.path, g.index))
 
 
@@ -292,6 +313,7 @@ class MixBuild:
     token_budget: int | None = None
     seed: int = 0
     tokenizer_name: str = BASE_MODEL
+    max_download_gb: float = 6.0
 
 
 def build_mix(
@@ -300,7 +322,10 @@ def build_mix(
     sampled: list[RowGroup] = []
     if source is None:
         fs = HfFileSystem()
-        sampled = sample_row_groups(all_row_groups(fs), cfg.groups, cfg.seed)
+        max_bytes = int(cfg.max_download_gb * 2**30)
+        sampled = sample_row_groups(all_row_groups(fs), cfg.groups, cfg.seed, max_bytes)
+        download = sum(g.compressed_bytes for g in sampled) / 2**30
+        print(f"reading {len(sampled)} row groups, {download:.2f} GiB compressed", flush=True)
 
         def source() -> Iterator[dict[str, Any]]:
             return stream_sampled_rows(sampled, cfg.rows_per_group, fs)
@@ -336,6 +361,7 @@ def build_mix(
         "tokenizer": cfg.tokenizer_name,
         "sampling": {
             "row_groups": len(sampled),
+            "download_gib": round(sum(g.compressed_bytes for g in sampled) / 2**30, 3),
             "rows_per_group": cfg.rows_per_group,
             "seed": cfg.seed,
             "groups": [f"{g.path.rsplit('/', 1)[-1]}#{g.index}" for g in sampled],
@@ -362,6 +388,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--tokenizer", default=BASE_MODEL)
     parser.add_argument("--groups", type=int, default=400, help="parquet row groups to sample")
     parser.add_argument("--rows-per-group", type=int, default=12)
+    parser.add_argument("--max-download-gb", type=float, default=6.0)
     parser.add_argument("--policy", choices=sorted(CANDIDATES), default="equal-domains-16k")
     parser.add_argument("--token-budget", type=int, default=None)
     parser.add_argument("--seed", type=int, default=0)
@@ -380,6 +407,7 @@ def main(argv: list[str] | None = None) -> None:
             token_budget=args.token_budget,
             seed=args.seed,
             tokenizer_name=args.tokenizer,
+            max_download_gb=args.max_download_gb,
         )
         report = build_mix(cfg)
     print(json.dumps(report, indent=2)[:20000])
