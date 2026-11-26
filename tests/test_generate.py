@@ -87,3 +87,10 @@ def test_separate_models_with_identical_weights_match_one_model(
         want = greedy(tiny_model, PROMPT, 30)[0, PROMPT.shape[1] :].tolist()
     assert res.token_ids == want
     assert res.switches > 0 and res.reprefilled_tokens > 0
+
+
+def test_token_ids_past_the_tokenizer_decode_as_nothing() -> None:
+    texts = TokenTexts(["a", "</think>"])
+    assert texts[1] == "</think>" and texts[5] == "" and texts[-1] == ""
+    m = texts.modes([0, 1])
+    assert texts.modes([0, 7, 1]) == [m[0], m[0], m[1]]

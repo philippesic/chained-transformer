@@ -25,11 +25,11 @@ class TokenTexts:
         return cls(tokenizer.batch_decode([[i] for i in range(size)], skip_special_tokens=False))
 
     def __getitem__(self, token_id: int) -> str:
-        return self.texts[token_id]
+        return self.texts[token_id] if 0 <= token_id < len(self.texts) else ""
 
     def modes(self, token_ids: Sequence[int], prompt_mode: Mode = Mode.THINK) -> list[int]:
         tracker = ModeTracker(prompt_mode=prompt_mode)
-        return [int(tracker.feed(self.texts[t])) for t in token_ids]
+        return [int(tracker.feed(self[t])) for t in token_ids]
 
 
 @dataclass
