@@ -34,7 +34,7 @@ Outputs go to `artifacts/smoke/<timestamp>/` (`smoke.json` plus one log per step
 
 ## Two machines
 
-Both checkouts track the private GitHub repository `origin`
+Both checkouts track the public GitHub repository `origin`
 (`git@github.com:philippesic/chained-transformer.git`). Commit and push on one machine, then pull
 on the other:
 
@@ -55,5 +55,5 @@ so its memory and speed numbers do not stand in for the 5080's.
 - Product code in `chained_transformer/` never imports `tools/` or `tests/`.
 - Everything large stays in ignored `artifacts/`. Compact evidence that a result needs is
   copied into `results/<name>/`.
-- Push to `origin` at meaningful milestones. Ask before changing its visibility or publishing
+- Push to `origin` (public) at meaningful milestones. Ask before publishing
   elsewhere.

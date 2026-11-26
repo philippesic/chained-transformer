@@ -6,7 +6,7 @@ modes (think, code, answer) that the model switches between mid-answer. The
 
 Checkouts: `/home/philip/chained-transformer` on the RTX 5080 host and on the RTX 2080 Ti host
 (SSH alias `pstack-2080`). Remote: `git@github.com:philippesic/chained-transformer.git`
-(`origin`, private); both checkouts track `origin/main`. See
+(`origin`, public); both checkouts track `origin/main`. See
 [development](docs/development.md#two-machines). Do not change its visibility or publish
 elsewhere without asking.
 
