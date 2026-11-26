@@ -69,6 +69,6 @@ CLI that loads trained arms (the current CLI runs the base model only).
 
 ## Next
 
-Run `python -m tools.gpu_smoke` once the GPU is free, or queue it behind the control run in
-pueue's `gpu` group if Philip agrees. Then record memory and step time here and settle
+Philip decided on 2026-11-26 not to queue the GPU smoke behind BitDraft: he will say when the
+GPU is free. Then run `python -m tools.gpu_smoke`, record memory and step time here, and settle
 decisions 1 and 2.
