@@ -150,6 +150,17 @@ def test_verdict_heads_the_report(
     assert lines[2] == f"Verdict: {data['kill_rule']}."
     assert lines[3] == f"LoRA: {data['lora']}."
     assert data["margins"]["0"]["full_minus_sft"] == round(100 * full[0] - 40.0, 2)
+    assert data["margins_se"]["0"]["full_minus_sft"] == 0.0
+    assert f"| 0 | {100 * full[0] - 40.0:.2f} ± 0.00 |" in text
+
+
+def test_paired_standard_error_pools_benchmarks() -> None:
+    a = {"m": {"1": True, "2": False, "3": True, "4": True}, "h": {"x": True, "y": False}}
+    b = {"m": {"1": False, "2": False, "3": True, "4": False}, "h": {"x": True, "y": True}}
+    expected = 100 * ((1 / 3) / 4 + 0.5 / 2) ** 0.5 / 2
+    assert pilot_report.paired_se(a, b) == pytest.approx(expected)
+    assert pilot_report.paired_se(a, {"other": {}}) is None
+    assert pilot_report.paired_se({"m": {"1": True}}, {"m": {"1": False}}) is None
 
 
 def test_missing_report_makes_the_verdict_incomplete(tmp_path: Path) -> None:

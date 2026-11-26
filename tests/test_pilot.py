@@ -48,6 +48,8 @@ def test_each_eval_runs_right_after_its_last_training_run(tmp_path: Path) -> Non
     answer = steps.index(("train-one", "separate-s0-answer"))
     assert steps[answer + 1] == ("eval-one", "separate-s0")
     assert len(steps) == 24 and steps[-1] == ("eval-one", "separate-s1")
+    first_separate = min(i for i, (_, run) in enumerate(steps) if run.startswith("separate"))
+    assert steps.index(("eval-one", "moe-s1")) < first_separate
     sft = json.loads((root / "plan.json").read_text())["eval"][0]["argv"]
     assert sft[sft.index("--batch-size") + 1] == "auto"
 

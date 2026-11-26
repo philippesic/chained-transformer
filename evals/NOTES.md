@@ -97,7 +97,8 @@ uv run --locked --no-sync python -m evals.run --model <checkpoint or Hub name> \
 
 - The pilot evaluates each arm as soon as its training runs are done (`commands.sh` and `run`
   use that order), so an eval problem shows up after the first arm, and uses `--batch-size auto`
-  by default.
+  by default. The `separate` arm goes last, after both seeds of the other arms: it is not in the
+  kill rule and decodes at batch 1, so its evals are the slowest step of the pilot.
 - The pilot (`tools/pilot.py`) evaluates every arm greedily, because the `separate` arm's
   re-prefill loop only decodes greedily; Qwen3's recommended sampling (0.6/0.95/20) is for later
   runs. Its defaults (1,000 steps, 4,096 tokens, 8 rows per step, learning rate 1e-5 and 1e-4

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import statistics
 from collections.abc import Iterable, Sequence
 from pathlib import Path
@@ -254,19 +255,54 @@ def table_main(cfg: PilotConfig, stats: dict[str, dict[int, Stats]]) -> list[str
     return markdown_table(headers, rows)
 
 
+MARGINS = (
+    ("full_minus_sft", "full", "sft"),
+    ("full_minus_moe", "full", "moe"),
+    ("lora_minus_full", "lora", "full"),
+)
+
+
+def passes(root: Path, run_id: str) -> dict[str, dict[str, bool]]:
+    out: dict[str, dict[str, bool]] = {}
+    for scores in sorted((root / run_id / "eval").glob("*/scores.jsonl")):
+        out[scores.parent.name] = {s["task_id"]: bool(s["passed"]) for s in read_jsonl(scores)}
+    return out
+
+
+def paired_se(a: dict[str, dict[str, bool]], b: dict[str, dict[str, bool]]) -> float | None:
+    benches = sorted(set(a) & set(b))
+    variances = []
+    for bench in benches:
+        ids = sorted(set(a[bench]) & set(b[bench]))
+        if len(ids) < 2:
+            return None
+        diffs = [float(a[bench][t]) - float(b[bench][t]) for t in ids]
+        variances.append(statistics.variance(diffs) / len(ids))
+    if not variances:
+        return None
+    return 100.0 * math.sqrt(sum(variances)) / len(variances)
+
+
+def margin_errors(root: Path, cfg: PilotConfig) -> dict[str, dict[str, float | None]]:
+    out: dict[str, dict[str, float | None]] = {}
+    for seed in cfg.seeds:
+        runs = {arm: passes(root, f"{arm}-s{seed}") for arm in ("full", "sft", "moe", "lora")}
+        out[str(seed)] = {key: paired_se(runs[x], runs[y]) for key, x, y in MARGINS}
+    return out
+
+
 def table_kill(cfg: PilotConfig, result: dict[str, Any]) -> list[str]:
     rows = []
     for seed in cfg.seeds:
         m = result["margins"].get(str(seed), {})
-        rows.append(
-            [
-                str(seed),
-                *(
-                    fmt(m.get(k), 2)
-                    for k in ("full_minus_sft", "full_minus_moe", "lora_minus_full")
-                ),
-            ]
-        )
+        se = result["margins_se"].get(str(seed), {})
+        cells = []
+        for key, _, _ in MARGINS:
+            cell = fmt(m.get(key), 2)
+            if m.get(key) is not None and se.get(key) is not None:
+                cell += f" ± {se[key]:.2f}"
+            cells.append(cell)
+        rows.append([str(seed), *cells])
     return markdown_table(["seed", "full - sft", "full - moe", "lora - full"], rows)
 
 
@@ -369,6 +405,7 @@ def notes(root: Path, evals: list[EvalRun], stats: dict[str, dict[int, Stats]]) 
 def build(root: Path, data_limit: int | None) -> tuple[dict[str, Any], str]:
     cfg, trains, evals = load_plan(root)
     result = verdict(score_table(root, evals), cfg.seeds)
+    result["margins_se"] = margin_errors(root, cfg)
     stats = collect(root, evals)
     sw = switching(root, cfg, evals, data_limit)
     remarks = notes(root, evals, stats)
@@ -395,6 +432,10 @@ def build(root: Path, data_limit: int | None) -> tuple[dict[str, Any], str]:
         *table_main(cfg, stats),
         "",
         "## Table 2, kill rule margins (points)",
+        "",
+        "± is one paired standard error over the problems both arms answered, so a margin within "
+        f"about two of them of the {KILL_MARGIN_POINTS}-point line is not settled by these "
+        "problems.",
         "",
         *table_kill(cfg, result),
         "",

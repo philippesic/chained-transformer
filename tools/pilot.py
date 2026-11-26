@@ -273,7 +273,7 @@ def ordered_steps(trains: list[TrainRun], evals: list[EvalRun]) -> list[tuple[st
     steps: list[tuple[str, str]] = []
     trained: set[str] = set()
     waiting = list(evals)
-    for r in trains:
+    for r in sorted(trains, key=lambda t: t.arm == "separate"):
         steps.append(("train-one", r.id))
         trained.add(r.id)
         ready = [e for e in waiting if set(e.needs) <= trained]
