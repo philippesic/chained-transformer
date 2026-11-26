@@ -72,6 +72,8 @@ def fused_sdpa(
             with sdpa_kernel(FUSED_BACKENDS):
                 out = attend(query, key, value)
         except RuntimeError as err:
+            if isinstance(err, torch.cuda.OutOfMemoryError):
+                raise
             reason = f"{tuple(query.shape)} {query.dtype} mask={attention_mask is not None}: {err}"
             if not FALLBACKS:
                 warnings.warn(f"fused attention fell back to math: {reason}", stacklevel=2)

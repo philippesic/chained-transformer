@@ -60,7 +60,9 @@ Evidence against, which the paper has to answer head-on:
    `separate`), seeds 0 and 1, the same rows in the same order, equal steps and sequence length.
    Data: complete OpenThoughts3 rows under the chosen mix policy. Evals: MATH500 (answer segment,
    math-verify), HumanEval+ (evalplus 0.3.1), LiveCodeBench `release_v5` with contest dates
-   2024-10-01 to 2025-02-01, greedy for every arm because `separate` decodes greedily.
+   2024-10-01 to 2025-02-01, greedy for every arm because `separate` decodes greedily. The pilot's
+   verdict runs on a sample sized for a 2-point gap (`tools/eval_power.py`); paper numbers come
+   from `pilot widen`, which completes the full suite and adds `separate`.
 2. **Single-mode upgrade** (`chained_transformer.upgrade`). Retrain `code` on a code-heavy slice
    with the trunk and other modes frozen; report benchmark deltas for all three, per-label KL from
    the parent and drift before and after the first code position. Run it with loss on code
@@ -93,6 +95,9 @@ Evidence against, which the paper has to answer head-on:
 - **Table 5, serving.** `separate` against modes: re-prefilled tokens per response, tokens/s.
 - **Figure 1:** the architecture with one cache and per-mode MLPs. **Figure 2:** a real response
   coloured by mode. **Figure 3:** pass rate against number of switches, per arm.
+
+`python -m tools.pilot_report --root artifacts/pilot/NAME` prints Tables 1, 2, 4 and 5, the pass
+rate by switches for Figure 3 and the kill-rule verdict, and writes `results.md` and `results.json`.
 
 ## Threats to validity
 

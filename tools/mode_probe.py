@@ -150,7 +150,8 @@ def main(argv: list[str] | None = None) -> None:
     model = load_base(args.base, dtype=getattr(torch, args.dtype), device=device)
     model.eval()
     n_layers = model.config.num_hidden_layers
-    layers = args.layers or sorted({0, 1, 2, 4, 8, 12, 16, 20, 24, n_layers})
+    default = {0, 1, 2, 4, 8, 12, 16, 20, 24, n_layers}
+    layers = args.layers or sorted(layer for layer in default if layer <= n_layers)
     ds = load_from_disk(str(args.data))
     indices = pick_rows(ds, args.max_tokens, args.rows, args.seed)
     feats, labels, groups = collect(model, ds, indices, layers, args.per_label, device, args.seed)

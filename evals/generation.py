@@ -5,12 +5,19 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import torch
-from transformers import AutoTokenizer, GenerationConfig, PreTrainedTokenizerBase
+from transformers import (
+    AutoTokenizer,
+    GenerationConfig,
+    PreTrainedTokenizerBase,
+    StoppingCriteria,
+    StoppingCriteriaList,
+)
 from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 
+from chained_transformer.attention import FALLBACKS, use_attention
 from chained_transformer.checkpoint import load_checkpoint
 from chained_transformer.generate import TokenTexts, generate_separate_models, mode_tracking
 from chained_transformer.modes import MODE_NAMES, Mode
@@ -21,6 +28,7 @@ DEFAULT_TOKENIZER = "Qwen/Qwen3-0.6B"
 EOS_TOKENS = ("<|im_end|>", "<|endoftext|>")
 AUTO_BATCH_CAP = 16
 KV_FRACTION = 0.8
+REFILL_BELOW = 0.5
 GiB = 2**30
 
 
@@ -34,6 +42,7 @@ class GenSettings:
     batch_size: int = 1
     seed: int = 0
     enable_thinking: bool = True
+    refill: bool = True
 
 
 @dataclass(frozen=True)
@@ -87,6 +96,7 @@ def load_runner(
     tokenizer: str | None,
     dtype: torch.dtype,
     device: str,
+    attention: str = "auto",
 ) -> Runner:
     paths = list(separate) if separate else [model] if model else []
     if len(paths) not in (1, len(MODE_NAMES)):
@@ -99,12 +109,14 @@ def load_runner(
     tok.padding_side = "left"
     for b in built:
         b.model.eval()
+        use_attention(b.model, attention)
     spec = {
         "arm": "separate" if len(built) > 1 else (built[0].model.config.model_type),
         "models": [describe(b.model, p) for b, p in zip(built, paths, strict=True)],
         "tokenizer": tok_name,
         "dtype": str(dtype).removeprefix("torch."),
         "device": device,
+        "attention": attention,
     }
     return Runner([b.model for b in built], built[0].routing, tok, spec)
 
@@ -204,6 +216,125 @@ def _generate_batch(
     return results
 
 
+@dataclass
+class _Slot:
+    problem: Problem
+    prompt: list[int]
+    new: list[int] = field(default_factory=list)
+
+
+class _StopOrRefill(StoppingCriteria):
+    def __init__(
+        self, width: int, budgets: list[int], eos: list[int], low: int, device: torch.device
+    ) -> None:
+        self.width = width
+        self.budgets = torch.tensor(budgets, device=device)
+        self.eos = torch.tensor(eos, device=device)
+        self.ended = torch.zeros(len(budgets), dtype=torch.bool, device=device)
+        self.low = low
+        self.early = False
+
+    def __call__(
+        self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs: Any
+    ) -> torch.BoolTensor:
+        self.ended |= torch.isin(input_ids[:, -1], self.eos)
+        done = self.ended | (self.budgets <= input_ids.shape[1] - self.width)
+        if int((~done).sum()) <= self.low:
+            self.early = True
+            return cast(torch.BoolTensor, torch.ones_like(done))
+        return cast(torch.BoolTensor, done)
+
+
+def _finish(
+    slot: _Slot, finished: bool, texts: TokenTexts, tok: PreTrainedTokenizerBase
+) -> Generation:
+    start = len(slot.prompt) - 1
+    labels = texts.modes(slot.prompt + slot.new)[start : start + len(slot.new)]
+    return Generation(
+        slot.problem.task_id,
+        str(tok.decode(slot.new, skip_special_tokens=True)),
+        len(slot.new),
+        finished,
+        labels_of(labels),
+        switches_of(labels),
+        mode_runs=runs_of(labels),
+    )
+
+
+@torch.no_grad()
+def _generate_refill(
+    runner: Runner,
+    texts: TokenTexts,
+    problems: Sequence[Problem],
+    settings: GenSettings,
+    step: int,
+    on_done: Callable[[Generation], None],
+) -> int:
+    tok = runner.tokenizer
+    eos = _eos_ids(tok)
+    pad = tok.pad_token_id if tok.pad_token_id is not None else eos[0]
+    cap = settings.max_new_tokens
+    queue = [
+        _Slot(
+            p,
+            list(
+                tok(
+                    chat_prompt(tok, p, settings.enable_thinking), add_special_tokens=False
+                ).input_ids
+            ),
+        )
+        for p in reversed(problems)
+    ]
+    model = runner.models[0]
+    active: list[_Slot] = []
+    calls = 0
+    while queue or active:
+        while queue and len(active) < step:
+            active.append(queue.pop())
+        rows = [s.prompt + s.new for s in active]
+        width = max(len(r) for r in rows)
+        ids = torch.full((len(rows), width), pad, dtype=torch.long)
+        mask = torch.zeros_like(ids)
+        for i, r in enumerate(rows):
+            ids[i, width - len(r) :] = torch.tensor(r, dtype=torch.long)
+            mask[i, width - len(r) :] = 1
+        budgets = [cap - len(s.new) for s in active]
+        low = int(step * REFILL_BELOW) if queue else -1
+        stop = _StopOrRefill(width, budgets, eos, low, runner.device)
+        config = GenerationConfig(
+            max_new_tokens=max(budgets),
+            do_sample=settings.do_sample,
+            temperature=settings.temperature if settings.do_sample else None,
+            top_p=settings.top_p if settings.do_sample else None,
+            top_k=settings.top_k if settings.do_sample else None,
+            eos_token_id=eos,
+            pad_token_id=pad,
+        )
+        torch.manual_seed(settings.seed + calls)
+        inputs = {
+            "input_ids": ids.to(runner.device),
+            "attention_mask": mask.to(runner.device),
+            "generation_config": config,
+            "stopping_criteria": StoppingCriteriaList([stop]),
+        }
+        if runner.routing is None:
+            out = model.generate(**inputs)
+        else:
+            with mode_tracking(model, runner.routing, texts):
+                out = model.generate(**inputs)
+        calls += 1
+        carried = []
+        for i, slot in enumerate(active):
+            kept, finished = _trim(out[i, width : width + budgets[i]].tolist(), set(eos))
+            slot.new += kept
+            if finished or len(slot.new) >= cap:
+                on_done(_finish(slot, finished, texts, tok))
+            else:
+                carried.append(slot)
+        active = carried
+    return calls
+
+
 def _generate_separate(
     runner: Runner, texts: TokenTexts, problem: Problem, settings: GenSettings
 ) -> Generation:
@@ -293,17 +424,28 @@ def generate_all(
         torch.cuda.reset_peak_memory_stats(runner.device)
     step = resolve_batch(runner, problems, settings)
     results: list[Generation] = []
+
+    def done(g: Generation) -> None:
+        results.append(g)
+        if on_done is not None:
+            on_done(g)
+
+    refill = settings.refill and not runner.separate and len(problems) > step
+    calls = 0
+    fallbacks = len(FALLBACKS)
     start = time.perf_counter()
-    for i in range(0, len(problems), step):
-        chunk = problems[i : i + step]
-        if runner.separate:
-            batch = [_generate_separate(runner, texts, chunk[0], settings)]
-        else:
-            batch = _generate_batch(runner, texts, chunk, settings, settings.seed + i)
-        for g in batch:
-            results.append(g)
-            if on_done is not None:
-                on_done(g)
+    if refill:
+        calls = _generate_refill(runner, texts, problems, settings, step, done)
+    else:
+        for i in range(0, len(problems), step):
+            chunk = problems[i : i + step]
+            if runner.separate:
+                batch = [_generate_separate(runner, texts, chunk[0], settings)]
+            else:
+                batch = _generate_batch(runner, texts, chunk, settings, settings.seed + i)
+            calls += 1
+            for g in batch:
+                done(g)
     elapsed = time.perf_counter() - start
     tokens = sum(g.new_tokens for g in results)
     perf = {
@@ -311,6 +453,9 @@ def generate_all(
         "new_tokens": tokens,
         "tokens_per_s": round(tokens / elapsed, 2) if elapsed > 0 else 0.0,
         "batch_size": step,
+        "refill": refill,
+        "generate_calls": calls,
+        "attention_math_fallbacks": len(FALLBACKS) - fallbacks,
         **peak_memory_gib(runner.device),
     }
     return results, perf

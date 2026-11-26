@@ -44,6 +44,20 @@ pueue add -g ct -- uv run --locked --no-sync python -m evals.run --model <checkp
 - The `separate` arm re-prefills a model's missed tokens in chunks of 2,048 and keeps only the
   last position's logits, so a switch after thousands of thinking tokens does not materialise
   logits for every position.
+- Batched decoding refills: when half the rows of a batch have finished and problems are
+  waiting, the `generate` call stops, unfinished rows carry their tokens over and re-prefill,
+  and new problems take the free rows. Greedy output is identical to decoding one problem at a
+  time (tested). `--no-refill` keeps fixed batches; `perf.generate_calls` counts the calls.
+- `--sample N` or `--sample BENCH=N` evaluates a fixed subset: problems ordered by a salted hash
+  of their ids, so a larger N keeps every problem of a smaller one. `--resume` keeps the complete
+  rows of an earlier `responses.jsonl` and generates only the missing problems; it refuses when
+  the earlier report used another model or other generation settings (batch size and refill
+  aside). Together they let a sample grow, or widen to the whole benchmark, without redoing work.
+- `--attention auto` (the default) routes attention through the harness's fused path. On the
+  2080 Ti (compute capability 7.5) PyTorch's flash and cuDNN kernels need 8.0 or later and its
+  memory-efficient kernel takes only fp16 and fp32 there, so plain bf16 attention would fall
+  back to the math kernel; the fused path upcasts to fp32 instead. `--attention sdpa` or `eager`
+  pick Hugging Face's own.
 - `--limit N` marks the report as a smoke run. `--score-only` rescores saved responses.
   `--oracle` scores each benchmark's reference responses with no model, to check a scorer.
 - `--source math500=hf|github|<jsonl>`, `--source livecodebench=<dir of test*.jsonl>`; without a
@@ -99,7 +113,8 @@ pueue add -g ct -- uv run --locked --no-sync python -m evals.run --model <checkp
 
 - The pilot evaluates each arm as soon as its training runs are done (`commands.sh` and `run`
   use that order), so an eval problem shows up after the first arm, and uses `--batch-size auto`
-  by default.
+  by default. The `separate` arm goes last, after both seeds of the other arms: it is not in the
+  kill rule and decodes at batch 1, so its evals are the slowest step of the pilot.
 - The pilot (`tools/pilot.py`) evaluates every arm greedily, because the `separate` arm's
   re-prefill loop only decodes greedily; Qwen3's recommended sampling (0.6/0.95/20) is for later
   runs. Its defaults (1,000 steps, 4,096 tokens, 8 rows per step, learning rate 1e-5 and 1e-4
@@ -108,6 +123,22 @@ pueue add -g ct -- uv run --locked --no-sync python -m evals.run --model <checkp
 - The pilot trains through `train.main`'s `on_model` hook, which exists only on `cloud/harness`.
   On a tree with both branches merged, a 7-run tiny pilot on CPU trained, saved, evaluated and
   compared end to end.
+- `tools/pilot_report.py` turns a finished pilot into the paper's Tables 1, 2, 4 and 5 and the
+  kill-rule verdict (from `pilot.verdict`), tested on fake reports and run on the tiny CPU pilot.
+  Its notes flag missing reports, smoke limits, CPU timings, and a `separate` arm decoded at
+  batch 1 next to batched mode arms, which makes Table 5's tokens/s compare batch sizes.
+- The pilot defaults to the verdict eval set: `sft`, `full`, `lora` and `moe` on a per-benchmark
+  sample sized by `tools/eval_power.py` for a 2-point gap at two seeds, assuming the arms
+  disagree on 10% of problems (361 MATH500, all 164 HumanEval+, 361 LiveCodeBench). After each
+  eval, `pilot run` measures how often `full` and `sft`/`moe` disagree on shared problems (once
+  100 are shared) and grows the sample if needed, never shrinking it; earlier evals resume to
+  match. HumanEval+ has only 164 problems, so under the macro mean of three benchmarks the
+  sample reaches the whole suite once the arms disagree on 15% or more. `--eval-set full` plans
+  everything at once; `pilot widen` switches a verdict plan to it later. New tokens default to
+  `--seq-len`, the longest row the arms trained on, for every arm alike.
+- `tools/pilot_budget.py estimate` puts the verdict at about 4 to 7 days on the 2080 Ti (was 7 to
+  15) and 1 to 2 days on the 5080, now mostly training on the 2080 Ti. These are estimates from
+  stated assumptions until `measure` runs on each GPU.
 - `evals/switch_stats.py` reads `mode_runs`, which responses record from this branch on; older
   `responses.jsonl` files count as responses without a trace.
 

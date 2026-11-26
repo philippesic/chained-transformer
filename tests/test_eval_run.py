@@ -175,3 +175,47 @@ def test_separate_arm_needs_greedy(
                 str(tmp_path),
             ]
         )
+
+
+def test_sample_is_a_fixed_subset_that_grows_by_prefix(
+    tmp_path: Path, data: dict[str, Path], models: dict[str, Path]
+) -> None:
+    one = _run(data, tmp_path / "a", "--model", str(models["full"]), extra=("--sample", "1"))
+    _run(data, tmp_path / "b", "--model", str(models["lora"]), extra=("--sample", "1"))
+    two = _run(data, tmp_path / "c", "--model", str(models["full"]), extra=("--sample", "2"))
+    assert one["sample"]["sizes"] == {"math500": 1, "livecodebench": 1}
+    for name in ("math500", "livecodebench"):
+        assert one["benchmarks"][name]["n_scored"] == 1
+        assert one["benchmarks"][name]["n_available"] == 2
+
+        def ids(out: str, bench: str = name) -> set[str]:
+            return {r["task_id"] for r in read_jsonl(tmp_path / out / bench / "responses.jsonl")}
+
+        assert ids("a") == ids("b") and ids("a") < ids("c")
+    assert two["benchmarks"]["math500"]["n_scored"] == 2
+
+
+def test_resume_generates_only_what_is_missing(
+    tmp_path: Path, data: dict[str, Path], models: dict[str, Path]
+) -> None:
+    _run(data, tmp_path, "--model", str(models["full"]), extra=("--sample", "1"))
+    path = tmp_path / "math500" / "responses.jsonl"
+    first = read_jsonl(path)
+    path.write_text(path.read_text() + '{"task_id": "cut off')
+    report = _run(
+        data, tmp_path, "--model", str(models["full"]), extra=("--sample", "2", "--resume")
+    )
+    bench = report["benchmarks"]["math500"]
+    assert bench["perf"]["resumed"] == 1 and bench["n_scored"] == 2
+    rows = read_jsonl(path)
+    assert rows[0] == first[0] and len(rows) == 2
+    with pytest.raises(SystemExit, match="different generation settings"):
+        _run(
+            data,
+            tmp_path,
+            "--model",
+            str(models["full"]),
+            extra=("--resume", "--max-new-tokens", "10"),
+        )
+    with pytest.raises(SystemExit, match="different model"):
+        _run(data, tmp_path, "--model", str(models["lora"]), extra=("--resume",))

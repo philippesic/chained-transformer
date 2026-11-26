@@ -34,7 +34,7 @@ required-environments = ["sys_platform == 'linux' and platform_machine == 'x86_6
 testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
-    "gpu: needs a CUDA GPU and the downloaded base model",
+    "gpu: needs a CUDA GPU; run with -m gpu",
     "network: downloads data or runs evalplus for real",
 ]
 addopts = "-m 'not gpu and not network'"
