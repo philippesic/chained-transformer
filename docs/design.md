@@ -61,6 +61,34 @@ wrongly shaped `mode_ids` raises an error naming the repair.
 `freeze_all_but_mode(model, m)` leaves only mode `m`'s MLP (or its LoRA tensors) trainable,
 for single-mode retraining.
 
+## Checkpoints (`chained_transformer/checkpoint.py`)
+
+A mode checkpoint is a normal Hugging Face directory (`config.json`, `model.safetensors`,
+`generation_config.json`, tokenizer files) whose config has `model_type: chained_qwen3`.
+`ChainedQwen3Config` extends `Qwen3Config` with `mode_surgery` (the `SurgeryConfig`),
+`mode_names`, `mode_switch` (the tracker's switch strings, fence rule, prompt mode and a
+tracker version) and `base_model`. `ChainedQwen3ForCausalLM` is a `Qwen3ForCausalLM` that
+applies the surgery in its constructor and exposes `model.routing`. Importing the module
+registers both with `AutoConfig` and `AutoModelForCausalLM`, so `save_pretrained` and
+`from_pretrained` handle safetensors, tied embeddings and dtype. `load_checkpoint` returns a
+`Built` for chained and plain Qwen3 directories alike (plain ones have no routing).
+
+`convert(base, surgery)` applies the surgery to a loaded base model, builds the chained model on
+the meta device and assigns the weights, so every mode starts as an exact copy of the base MLP,
+LoRA B is zero and the MoE router is freshly initialised from `seed`. Non-persistent buffers
+(rotary frequencies) are copied from the base and the LM head is re-tied.
+
+On CPU in fp32, a fresh conversion reproduces the base logits bitwise for `full` and `lora` when
+all tokens share a mode; mixed-mode batches differ by about 4e-6 (row-gathered matmuls), and
+`moe` by about 3e-6 (weighted sum of identical experts). `tools/conversion_check.py` measures this
+for prefill, cached decoding across switches and a save/load round trip.
+
+`QWEN3_SHAPES` records the Qwen3-0.6B and 1.7B shapes so configs and parameter counts can be
+planned without downloading weights (`python -m chained_transformer.checkpoint plan`); a test
+checks the 0.6B shape against the published counts; the generated configs and counts are in
+`configs/qwen3-0.6b/` and `configs/qwen3-1.7b/`. `mode_slice(model, m)` returns one mode's
+tensors, for single-mode upgrades.
+
 ## Generation (`chained_transformer/generate.py`)
 
 `mode_tracking(model, routing, texts)` registers a forward pre-hook. On prefill it starts one

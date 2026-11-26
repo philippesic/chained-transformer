@@ -22,6 +22,7 @@ the GPU smoke. Model weights and datasets download into the Hugging Face cache
 | --- | --- | --- | --- |
 | Check (pre-commit hook) | `uv run --locked --no-sync python -m tools.check` | ruff lint and format, mypy, pytest on CPU | ~7 s |
 | Real-model equivalence on CPU | `OMP_NUM_THREADS=4 uv run --locked --no-sync python -m tools.gpu_equivalence --device cpu --dtype float32 --max-new-tokens 160 --out artifacts/cpu-checks/equivalence.json` | Qwen3-0.6B: identical modes give the base model's greedy tokens across mode switches | ~3 min |
+| Conversion check on CPU | `OMP_NUM_THREADS=4 uv run --locked --no-sync python -m tools.conversion_check --round-trip --out artifacts/cpu-checks/conversion.json` (add `--random-shape` to skip the download) | Fresh `full`/`lora`/`moe` conversions of Qwen3-0.6B against the base: prefill logits per routing pattern, cached decoding across switches, bitwise save/load | ~1 min |
 | GPU smoke | `uv run --locked --no-sync python -m tools.gpu_smoke` | bf16 and fp32 equivalence on the GPU, a 50-step `full` run, 10-step runs of the other arms, one 16k-token memory probe | ~15 min (estimate) |
 
 The check lane uses a tiny random Qwen3 and the cached Qwen3-0.6B tokenizer, so it needs the

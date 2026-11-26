@@ -1,0 +1,136 @@
+{
+  "base": "Qwen/Qwen3-0.6B",
+  "weights": "random (real shapes)",
+  "dtype": "float32",
+  "device": "cpu",
+  "tokens": [
+    2,
+    48
+  ],
+  "base_params": 596049920,
+  "variants": {
+    "full": {
+      "convert_s": 1.63,
+      "params": {
+        "total": 1124532224,
+        "mlp": 792723456,
+        "trainable_per_mode": 264241152
+      },
+      "prefill": {
+        "think": {
+          "bitwise": true,
+          "max_abs_diff": 0.0
+        },
+        "code": {
+          "bitwise": true,
+          "max_abs_diff": 0.0
+        },
+        "answer": {
+          "bitwise": true,
+          "max_abs_diff": 0.0
+        },
+        "think_code_answer": {
+          "bitwise": false,
+          "max_abs_diff": 3.814697265625e-06
+        },
+        "random": {
+          "bitwise": false,
+          "max_abs_diff": 3.814697265625e-06
+        }
+      },
+      "decode_switching": {
+        "bitwise": false,
+        "max_abs_diff": 2.5033950805664062e-06
+      },
+      "round_trip": {
+        "seconds": 3.43,
+        "same_keys": true,
+        "all_bitwise": true,
+        "tied": true,
+        "bytes": 4498187427
+      }
+    },
+    "lora": {
+      "convert_s": 0.39,
+      "params": {
+        "total": 662110208,
+        "mlp": 330301440,
+        "trainable_per_mode": 22020096
+      },
+      "prefill": {
+        "think": {
+          "bitwise": true,
+          "max_abs_diff": 0.0
+        },
+        "code": {
+          "bitwise": true,
+          "max_abs_diff": 0.0
+        },
+        "answer": {
+          "bitwise": true,
+          "max_abs_diff": 0.0
+        },
+        "think_code_answer": {
+          "bitwise": false,
+          "max_abs_diff": 3.814697265625e-06
+        },
+        "random": {
+          "bitwise": false,
+          "max_abs_diff": 3.814697265625e-06
+        }
+      },
+      "decode_switching": {
+        "bitwise": false,
+        "max_abs_diff": 2.5033950805664062e-06
+      },
+      "round_trip": {
+        "seconds": 2.51,
+        "same_keys": true,
+        "all_bitwise": true,
+        "tied": true,
+        "bytes": 2648535507
+      }
+    },
+    "moe": {
+      "convert_s": 1.07,
+      "params": {
+        "total": 1124618240,
+        "mlp": 792809472,
+        "trainable_per_mode": 0
+      },
+      "prefill": {
+        "think": {
+          "bitwise": false,
+          "max_abs_diff": 3.427267074584961e-06
+        },
+        "code": {
+          "bitwise": false,
+          "max_abs_diff": 3.427267074584961e-06
+        },
+        "answer": {
+          "bitwise": false,
+          "max_abs_diff": 3.427267074584961e-06
+        },
+        "think_code_answer": {
+          "bitwise": false,
+          "max_abs_diff": 3.427267074584961e-06
+        },
+        "random": {
+          "bitwise": false,
+          "max_abs_diff": 3.427267074584961e-06
+        }
+      },
+      "decode_switching": {
+        "bitwise": false,
+        "max_abs_diff": 3.6954879760742188e-06
+      },
+      "round_trip": {
+        "seconds": 3.15,
+        "same_keys": true,
+        "all_bitwise": true,
+        "tied": true,
+        "bytes": 4498535002
+      }
+    }
+  }
+}
