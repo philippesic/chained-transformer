@@ -34,7 +34,7 @@ git switch cloud/harness
 ## 1. 2080 Ti: check
 
 ```sh
-uv run --locked --no-sync python -m tools.check
+pueue add -g ct -- uv run --locked --no-sync python -m tools.check
 ```
 
 Pass: exit 0 with no `failed:` lines. Most likely to fail, in order:
@@ -73,8 +73,8 @@ pueue add -g ct -- uv run --locked --no-sync python -m tools.memory_check --devi
 
 Expected: `sft`, `lora` and `separate` fit; `full` and `moe` (estimated 10.0 and 10.8 GiB
 before the CUDA context) are likely `OVER` or out of memory, so exit 1 here is expected and is
-why those two arms train on the 5080 (5080 only, once BitDraft is done and Philip says so). To see whether frozen embeddings bring them in
-(estimated 9.4 and 10.2):
+why those two arms train on the 5080 (5080 only, once BitDraft is done and Philip says so). To
+see whether frozen embeddings bring them in (estimated 9.4 and 10.2):
 
 ```sh
 pueue add -g ct -- uv run --locked --no-sync python -m tools.memory_check --device cuda --base Qwen/Qwen3-0.6B --arms full moe --seq-len 16384 --freeze-embeddings --budget-gib 10.5 --out artifacts/memory-check/2080-fixed-16k-frozen.json

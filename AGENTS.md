@@ -36,8 +36,10 @@ elsewhere without asking.
   generation must use the same tracker.
 - Run `python -m tools.check` before committing (the hook does it). Report CPU-only checks as
   CPU-only.
-- GPU: the 5080 is shared with BitDraft. Inspect `nvidia-smi` and `pueue status` first; never
-  stop another project's job. Jobs longer than a few minutes go through jobwatch; runs over about
-  one GPU-hour need a preflight.
+- GPU: the 5080 is reserved for BitDraft and is not used until Philip says so. On the 2080 Ti,
+  queue this project's GPU jobs in pueue's `ct` group (`pueue add -g ct -- ...`); the `gpu` group
+  there belongs to ShaderLOD and is never used. Inspect `nvidia-smi` and `pueue status` first;
+  never stop another project's job. Jobs longer than a few minutes go through jobwatch; runs over
+  about one GPU-hour need a preflight.
 - Large outputs go to ignored `artifacts/`; record their purpose and disposal in the task.
 - No code comments or docstrings. Commit small coherent checkpoints.

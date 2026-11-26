@@ -23,8 +23,10 @@ else imports them. Delete both once this branch is merged.
 
 ## Running
 
+On the 2080 Ti, in this project's pueue group `ct`:
+
 ```sh
-uv run --locked --no-sync python -m evals.run --model <checkpoint or Hub name> \
+pueue add -g ct -- uv run --locked --no-sync python -m evals.run --model <checkpoint or Hub name> \
   --benchmarks math500 humanevalplus livecodebench --out artifacts/evals/<name>
 ```
 
