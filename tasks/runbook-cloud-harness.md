@@ -5,8 +5,11 @@ pass; keep its printed output and the JSON file it names. Nothing on this branch
 torch yet (see [overnight-cloud-2026-11-26](overnight-cloud-2026-11-26.md)), so step 1 is the
 first time most of it executes.
 
-The 2080 Ti is free, so it goes first. The 5080's data build and probes need no GPU and can run
-at the same time; its GPU steps wait until BitDraft is done.
+The 2080 Ti (Turing, 11 GB, sm_75) goes first. Its GPU commands queue in this project's pueue
+group `ct` (parallelism 1), as written below; pueue's `gpu` group there belongs to ShaderLOD and
+is never used. Read a queued step's output with `pueue follow` or `pueue log`. The 5080 is
+reserved for BitDraft: its data build and probes need no GPU and can run at the same time, and
+its GPU steps are 5080 only, once BitDraft is done and Philip says so.
 
 ## 0. Get the branch
 
@@ -44,7 +47,7 @@ Pass: exit 0 with no `failed:` lines. Most likely to fail, in order:
 ## 2. 2080 Ti: memory at 4k and 8k (must fit)
 
 ```sh
-uv run --locked --no-sync python -m tools.memory_check --device cuda --base Qwen/Qwen3-0.6B --seq-len 4096 8192 --budget-gib 10.5 --out artifacts/memory-check/2080-fixed.json
+pueue add -g ct -- uv run --locked --no-sync python -m tools.memory_check --device cuda --base Qwen/Qwen3-0.6B --seq-len 4096 8192 --budget-gib 10.5 --out artifacts/memory-check/2080-fixed.json
 ```
 
 Pass: exit 0 and ten lines (five arms, two lengths), each ending in `fits`, none with
@@ -65,22 +68,22 @@ estimate is usable as is; record the ratios either way, they are what calibrates
 ## 3. 2080 Ti: memory at 16k (informative)
 
 ```sh
-uv run --locked --no-sync python -m tools.memory_check --device cuda --base Qwen/Qwen3-0.6B --seq-len 16384 --budget-gib 10.5 --out artifacts/memory-check/2080-fixed-16k.json
+pueue add -g ct -- uv run --locked --no-sync python -m tools.memory_check --device cuda --base Qwen/Qwen3-0.6B --seq-len 16384 --budget-gib 10.5 --out artifacts/memory-check/2080-fixed-16k.json
 ```
 
 Expected: `sft`, `lora` and `separate` fit; `full` and `moe` (estimated 10.0 and 10.8 GiB
 before the CUDA context) are likely `OVER` or out of memory, so exit 1 here is expected and is
-why those two arms train on the 5080. To see whether frozen embeddings bring them in
+why those two arms train on the 5080 (5080 only, once BitDraft is done and Philip says so). To see whether frozen embeddings bring them in
 (estimated 9.4 and 10.2):
 
 ```sh
-uv run --locked --no-sync python -m tools.memory_check --device cuda --base Qwen/Qwen3-0.6B --arms full moe --seq-len 16384 --freeze-embeddings --budget-gib 10.5 --out artifacts/memory-check/2080-fixed-16k-frozen.json
+pueue add -g ct -- uv run --locked --no-sync python -m tools.memory_check --device cuda --base Qwen/Qwen3-0.6B --arms full moe --seq-len 16384 --freeze-embeddings --budget-gib 10.5 --out artifacts/memory-check/2080-fixed-16k-frozen.json
 ```
 
 ## 4. 2080 Ti: the old harness, for the before and after (optional)
 
 ```sh
-uv run --locked --no-sync python -m tools.memory_check --device cuda --base Qwen/Qwen3-0.6B --harness current-turing --seq-len 4096 --budget-gib 10.5 --out artifacts/memory-check/2080-current.json
+pueue add -g ct -- uv run --locked --no-sync python -m tools.memory_check --device cuda --base Qwen/Qwen3-0.6B --harness current-turing --seq-len 4096 --budget-gib 10.5 --out artifacts/memory-check/2080-current.json
 ```
 
 Expected: every arm `OUT OF MEMORY`, most in `optimizer`, as in last night's smoke, and exit 1.
@@ -89,7 +92,7 @@ If the old harness fits now, last night's failure had a cause the overnight writ
 ## 5. 2080 Ti: MoE in bf16
 
 ```sh
-uv run --locked --no-sync python -m tools.gpu_equivalence --variants full moe --out artifacts/equivalence/2080-moe-bf16.json
+pueue add -g ct -- uv run --locked --no-sync python -m tools.gpu_equivalence --variants full moe --out artifacts/equivalence/2080-moe-bf16.json
 ```
 
 Each printed line is: variant, dtype, identical tokens, first divergence, max logit difference,
@@ -118,14 +121,15 @@ For the 2080 Ti's later training runs, the 8k version
 OMP_NUM_THREADS=8 uv run --locked --no-sync python -m tools.mode_probe --data artifacts/data/ot3-mix
 ```
 
-Add `--device cuda` instead when a GPU is free. Pass: exit 0 and
+Add `--device cuda` instead when a GPU is free; on the 5080 that is 5080 only, once BitDraft is
+done and Philip says so. Pass: exit 0 and
 `artifacts/probes/mode-probe.json` with, for `position_mode` and `segment_label`, a balanced
 accuracy per layer (layer 0 is the embedding) and a `majority_baseline`. What to read from it:
 the first layer where accuracy is well above the baseline is where the modes are already
 linearly separable, which is where the design note's option 3 (mode-specific ends, shared
 looped middle) would start specialising.
 
-## 8. 5080, when the GPU is free: GPU smoke
+## 8. 5080 only, once BitDraft is done and Philip says so: GPU smoke
 
 Check `nvidia-smi` and `pueue status` first; never stop another project's job.
 

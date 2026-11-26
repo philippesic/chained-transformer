@@ -66,26 +66,56 @@ vocabulary) whose outputs depend on routing.
 
 ## First GPU run
 
-Run the whole list in one go and read one report:
+The checklist runs on the 2080 Ti (Turing, 11 GB, sm_75) in this project's pueue group `ct`
+(parallelism 1). Pueue's `gpu` group belongs to ShaderLOD and is never used for this project;
+the 5080 is reserved for BitDraft and is not used until Philip says so.
 
 ```sh
-uv run --locked --no-sync python -m tools.serving_gpu_checklist
+pueue add -g ct -- uv run --locked --no-sync python -m tools.serving_gpu_checklist
 ```
 
-It refuses to start while another process uses the GPU (queue it in pueue's `gpu` group),
-then runs `tools.check`, the Triton tests on the GPU, `tools.bench_mode_mlp` with its CUDA graph
-check, the vLLM engine tests (eager, then compiled with CUDA graphs) in the vLLM virtualenv,
-`tools.bench_vllm`, `tools.bench_paging` and `tools.bench_serving`. Each step gets a log, and
-`report.md` in `artifacts/serving/gpu-checklist/<time>/` gives pass, fail, warn or not run per
-step, with the log tail and what a failure means. A vLLM test that skips on the GPU counts as a
-failure. `--only`, `--skip` and `--model tiny` narrow it; `--dry-run` prints the commands.
-With `--allow-other-clients` on the shared 5080, a vLLM engine can fail to start if the other
-workload's memory use changes while vLLM profiles memory.
+A preflight prints the device, compute capability, total and free memory, the torch, CUDA and
+Triton versions in this env and the vLLM, torch and Triton versions in the vLLM virtualenv, and
+a memory plan for each vLLM engine. It refuses to start, and says why, when there is no GPU,
+the GPU is below sm_75, another process is on the GPU, or `--gpu-mem` asks for more than is
+free. Then it runs `tools.check`, the Triton tests on the GPU, `tools.bench_mode_mlp` with its
+CUDA graph check, the vLLM engine tests (eager, then compiled with CUDA graphs) in the vLLM
+virtualenv, `tools.bench_vllm`, `tools.bench_paging` and `tools.bench_serving`. A vLLM test
+that skips on the GPU counts as a failure.
+
+Each step prints one line, `PASS`, `FAIL` or `SKIP`. A failed line names what broke, the likely
+cause read from the log (out of memory, bfloat16 on Turing, shared memory, no kernel image,
+vLLM's free-memory check, a missing model) and the likely fix. The lines and the preflight go
+to `runs/serving-gpu-checklist-<time>.txt`, which is the file to paste back. Logs and
+`report.md` stay in `artifacts/serving/gpu-checklist/<time>/`. `--only`, `--skip` and
+`--model tiny` narrow the run; `--dry-run` prints the commands.
+
+On the 2080 Ti:
+
+- No bfloat16. Every step runs float16 or float32; vLLM refuses bfloat16 below sm_80 and the
+  kernel refuses it with a message to serve in float16. Bfloat16 checks are 5080 only, once
+  BitDraft is done and Philip says so.
+- vLLM picks its Triton attention backend: FlashAttention needs sm_80 and vLLM 0.34 disables
+  FlashInfer on sm_75.
+- Triton runs single-stage loads (its software pipelining starts at sm_80) with 64 KiB of
+  shared memory per block. A kernel-bench config that needs more is noted and not timed; the
+  step fails only when no Triton config runs.
+- Memory: Qwen3-0.6B takes 1.1 GiB in float16, the chained model with three modes 2.1 GiB, and
+  the KV cache 0.11 GiB per 1,000 tokens. The defaults, `--gpu-mem 0.8` and
+  `--max-model-len 1024`, leave each engine room, including the separate arm's three engines at
+  a third of the budget each. The preflight's plan says which engine is short and the
+  `--gpu-mem` that fits what is free.
+- Speed numbers from the 2080 Ti are not 5080 numbers; 5080 numbers are 5080 only, once BitDraft
+  is done and Philip says so.
+
+`--allow-other-clients` starts next to another GPU process. A vLLM engine can then fail to
+start if that process's memory use changes while vLLM profiles memory.
 
 Changes made for that run, all checked on CPU:
 
 - Float32 Triton dots use `input_precision="ieee"`. Triton defaults to TF32 on Ampere and newer,
-  which would have failed the float32 kernel tests and the float32 vLLM test on the 5080.
+  which would have failed the float32 kernel tests and the float32 vLLM test on the 5080. The
+  2080 Ti has no TF32, so this matters there only once runs move to newer GPUs.
 - The kernel checks shapes, dtypes, devices and block sizes before launching, and refuses
   bfloat16 below compute capability 8.0 with a message to serve in float16 (the 2080 Ti).
   `num_tokens` is not specialised, so new batch sizes do not recompile the kernel.
@@ -99,7 +129,7 @@ Changes made for that run, all checked on CPU:
   `collect_traces` keys traces by the caller's id; the engine tests looked them up by the
   caller's id and would have failed with KeyError.
 - The engine tests set `TRITON_F32_DEFAULT=ieee`: float32 attention runs on vLLM's Triton
-  backend, whose dots default to TF32 on the 5080, which can flip exact greedy matches.
+  backend, whose dots default to TF32 on Ampere and newer, which can flip exact greedy matches.
 - The vLLM engine tests cap `gpu_memory_utilization` at 0.2 instead of vLLM's 0.9, run the
   Triton impl on CUDA, and `tests/test_serving_vllm_graphs.py` adds a compiled, CUDA-graph
   engine with the Triton impl checked against Hugging Face at three batch sizes.
@@ -128,8 +158,8 @@ and a fresh process with only `register()` reads both the export and the saved `
 - `VLLM_COMPILE` piecewise compilation and CUDA graph capture and replay with `mode_ids`. The CPU
   platform forces `DYNAMO_TRACE_ONCE` and has no CUDA graphs.
   `tests/test_serving_vllm_graphs.py` checks this on a GPU.
-- The Triton kernel on a GPU: correctness in compiled mode, block sizes and speed on the 2080 Ti
-  and 5080.
+- The Triton kernel on a GPU: correctness in compiled mode, block sizes and speed on the 2080 Ti,
+  and on the 5080 (5080 only, once BitDraft is done and Philip says so).
 - Loading the plugin in vLLM worker processes through the `vllm.general_plugins` entry point.
   The shim was imported directly; it was not installed.
 - Real Qwen3 checkpoints and tokenizer, including tracker texts from a real tokenizer and

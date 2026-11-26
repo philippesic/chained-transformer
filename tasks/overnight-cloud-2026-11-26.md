@@ -71,13 +71,14 @@ coefficients not yet calibrated, so treat these as estimates):
 | separate | 12.2 | 4.2 | 5.1 | 6.9 | 6.3 |
 
 Reading: every arm should fit the 11 GB card at 4k and 8k with at least 2 GB to spare; at 16k,
-`full` and `moe` have no margin on that card and belong on the 5080. The current-harness
+`full` and `moe` have no margin on that card and belong on the 5080 (5080 only, once BitDraft is
+done and Philip says so). The current-harness
 column matches what the 2080 smoke saw (every arm out of memory at 4k).
 
-To measure instead of estimate, on the 2080 Ti:
+To measure instead of estimate, on the 2080 Ti in this project's pueue group `ct`:
 
 ```sh
-uv run --locked --no-sync python -m tools.memory_check --device cuda --base Qwen/Qwen3-0.6B --seq-len 4096 8192 16384 --budget-gib 10.5
+pueue add -g ct -- uv run --locked --no-sync python -m tools.memory_check --device cuda --base Qwen/Qwen3-0.6B --seq-len 4096 8192 16384 --budget-gib 10.5
 ```
 
 It runs each arm for 3 steps in its own process, records peak allocated and reserved GiB per
