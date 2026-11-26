@@ -71,7 +71,7 @@ def save_random_model(shape: ModelShape, path: Path) -> None:
     from transformers import Qwen3ForCausalLM
 
     torch.manual_seed(0)
-    model = Qwen3ForCausalLM(shape_config(shape)).to(torch.bfloat16)
+    model = Qwen3ForCausalLM(shape_config(shape)).bfloat16()
     model.save_pretrained(path)
 
 

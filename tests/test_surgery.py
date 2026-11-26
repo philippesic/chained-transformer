@@ -156,7 +156,7 @@ def test_moe_identical_experts_return_the_expert_output_in_bf16(
 
 
 def test_moe_identical_experts_match_full_modes_in_bf16(tiny_model: Qwen3ForCausalLM) -> None:
-    tiny_model.to(torch.bfloat16)
+    tiny_model.bfloat16()
     base = copy.deepcopy(tiny_model)
     full = copy.deepcopy(tiny_model)
     routing = apply_surgery(full, SurgeryConfig(variant="full"))

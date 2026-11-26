@@ -24,7 +24,7 @@ CUDA = torch.device("cuda")
 MiB = 2**20
 
 
-def _model(layers: int = 2) -> Qwen3ForCausalLM:
+def _model(layers: int = 2, device: torch.device | None = None) -> Qwen3ForCausalLM:
     torch.manual_seed(0)
     cfg = Qwen3Config(
         vocab_size=128,
@@ -37,7 +37,8 @@ def _model(layers: int = 2) -> Qwen3ForCausalLM:
         max_position_embeddings=2048,
         tie_word_embeddings=True,
     )
-    return Qwen3ForCausalLM(cfg).float().eval()
+    with device or torch.device("cpu"):
+        return Qwen3ForCausalLM(cfg).float().eval()
 
 
 def _ids(n: int, seed: int) -> torch.Tensor:
@@ -46,7 +47,9 @@ def _ids(n: int, seed: int) -> torch.Tensor:
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_fused_attention_on_cuda_matches_eager_without_math_fallback(dtype: torch.dtype) -> None:
-    eager = _model().to(device=CUDA, dtype=dtype)
+    eager = _model(device=CUDA)
+    if dtype == torch.bfloat16:
+        eager = eager.bfloat16()
     use_attention(eager, "eager")
     fused = copy.deepcopy(eager)
     use_attention(fused, "auto")
@@ -101,7 +104,7 @@ def test_optimizer_step_temporaries_stay_within_a_chunk() -> None:
 
 
 def test_moe_backward_with_checkpointing_frees_recomputed_activations() -> None:
-    model = _model(layers=4).to(CUDA)
+    model = _model(layers=4, device=CUDA)
     apply_surgery(model, SurgeryConfig(variant="moe", moe_experts=3, moe_top_k=2))
     use_attention(model, "auto")
     model.activation_checkpointing_enable({"use_reentrant": False})
