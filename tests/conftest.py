@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 import torch
-from transformers import Qwen3Config, Qwen3ForCausalLM
+
+if not torch.cuda.is_available():
+    os.environ.setdefault("TRITON_INTERPRET", "1")
+
+from transformers import Qwen3Config, Qwen3ForCausalLM  # noqa: E402
 
 
 @pytest.fixture

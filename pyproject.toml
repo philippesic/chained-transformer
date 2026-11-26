@@ -53,3 +53,8 @@ warn_unused_ignores = true
 warn_redundant_casts = true
 no_implicit_optional = true
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["serving.triton_grouped"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
