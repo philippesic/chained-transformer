@@ -422,6 +422,10 @@ def cmd_estimate(args: argparse.Namespace) -> None:
             raise SystemExit(f"--measured wants GPU=PATH with GPU in {', '.join(GPUS)}")
         measured[key] = load_measured(Path(path))
     rows = mean_row_tokens(cfg) if args.row_tokens is None else args.row_tokens
+    if args.decode_ms is not None:
+        lo, hi = sorted(args.decode_ms)
+        for key in args.gpus:
+            GPUS[key] = replace(GPUS[key], decode_launch_s=(lo / 1000, hi / 1000))
     data, text = estimate(cfg, args.gpus, measured, args.mean_new_tokens, rows)
     if args.out is not None:
         args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -462,6 +466,13 @@ def main(argv: list[str] | None = None) -> None:
     )
     est.add_argument("--mean-new-tokens", type=float, default=4000.0)
     est.add_argument("--row-tokens", type=float, help="mean training row length")
+    est.add_argument(
+        "--decode-ms",
+        type=float,
+        nargs=2,
+        metavar=("LOW", "HIGH"),
+        help="ms per decode step, e.g. 1000 x batch_size / tokens_per_s from a GPU eval report",
+    )
     est.add_argument("--out", type=Path)
     est.set_defaults(func=cmd_estimate)
 

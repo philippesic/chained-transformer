@@ -154,3 +154,17 @@ def test_measure_leaves_a_busy_gpu_alone(monkeypatch: pytest.MonkeyPatch, tmp_pa
         pilot_budget.main(["measure", "--device", "cuda", "--out", str(tmp_path / "m.json")])
     assert stop.value.code == 3
     assert not (tmp_path / "m.json").exists()
+
+
+def test_decode_ms_replaces_the_decode_assumption(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    monkeypatch.setattr(pilot_budget, "GPUS", dict(GPUS))
+    out = tmp_path / "e.json"
+    pilot_budget.main(["estimate", "--gpus", "5080", "--out", str(out)])
+    slow = json.loads(out.read_text())["gpus"]["5080"]["arms"]["separate"]["eval_hours"]
+    pilot_budget.main(["estimate", "--gpus", "5080", "--decode-ms", "10", "5", "--out", str(out)])
+    fast = json.loads(out.read_text())["gpus"]["5080"]["arms"]["separate"]["eval_hours"]
+    assert fast[1] < slow[0] and fast[0] < fast[1]
+    assert pilot_budget.GPUS["5080"].decode_launch_s == (0.005, 0.01)
+    capsys.readouterr()

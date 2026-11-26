@@ -111,6 +111,9 @@ uv run --locked --no-sync python -m evals.run --model <checkpoint or Hub name> \
   kill-rule verdict (from `pilot.verdict`), tested on fake reports and run on the tiny CPU pilot.
   Its notes flag missing reports, smoke limits, CPU timings, and a `separate` arm decoded at
   batch 1 next to batched mode arms, which makes Table 5's tokens/s compare batch sizes.
+- `tools/pilot_budget.py estimate` puts the pilot as planned at about a week on the 5080 and
+  two to four weeks on the 2080 Ti, mostly evals; the `separate` arm's batch-1 evals are the
+  largest item. These are estimates from stated assumptions until `measure` runs on each GPU.
 - `evals/switch_stats.py` reads `mode_runs`, which responses record from this branch on; older
   `responses.jsonl` files count as responses without a trace.
 
