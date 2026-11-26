@@ -126,18 +126,20 @@ loss by segment label, MoE balance loss, gradient norm, step time and peak memor
 Rows are currently truncated to their first `--seq-len` tokens, one row per micro-batch.
 Checkpoint saving is not implemented yet.
 
-## Evals (`chained_transformer/evals.py`)
+## Evals (`evals/`)
 
-Stubs, not full runs. Generation goes through `generate_responses`, which uses the mode hook
-when a routing object is given and records tokens per mode, tokens/s and peak memory.
-
-- MATH500 (`HuggingFaceH4/MATH-500`): scored with `math-verify` on the answer segment only.
-- HumanEval+: the last code block after thinking becomes an `evalplus` sample, then
-  `evalplus.evaluate` runs it.
-- LiveCodeBench: not wired. Its scorer, `lcb_runner`, is not on PyPI; it needs a pinned commit.
-- Think-word leakage: matches of "wait", "hmm", "let me", "alternatively", "actually",
-  "double-check" and "I think" per 1,000 words in the answer segment.
+`python -m evals.run` loads a mode checkpoint, a plain checkpoint, a Hub name or (for `separate`)
+three plain fine-tunes, generates through the mode hook or the separate-models loop, and scores
+MATH500 (math-verify on the answer segment), HumanEval+ (evalplus) and LiveCodeBench (a
+re-implementation of `lcb_runner`'s grading in a subprocess sandbox, `release_v5`, contest dates
+2024-10-01 to 2025-02-01). Every response is split into think, code and answer text by the same
+`ModeTracker`, which also drives the thinking-leakage metrics. Each run writes `report.json`
+(model, generation settings, git commit, data sources with hashes, scores, leakage, tokens by
+segment label, switches, tokens/s, peak memory) and per-benchmark `responses.jsonl` and
+`scores.jsonl`; `--score-only` rescores saved responses and `--oracle` scores reference answers
+to check a scorer. Details, checks and known deviations from the official harnesses are in
+[evals/NOTES.md](../evals/NOTES.md). `chained_transformer/evals.py` is the older stub and can be
+deleted.
 
 These use our own generation and scorers rather than lm-eval-harness, because every arm must
-generate through the mode hook (or the separate-models loop) and the scorers above are the ones
-reasoning-model evaluations normally use.
+generate through the mode hook (or the separate-models loop).
