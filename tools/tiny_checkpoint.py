@@ -5,13 +5,15 @@ import json
 from pathlib import Path
 
 import torch
-from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
+from tokenizers import AddedToken, Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast, Qwen3Config, Qwen3ForCausalLM
 
 from chained_transformer.checkpoint import convert, save_checkpoint
+from chained_transformer.modes import THINK_CLOSE, THINK_OPEN
 from chained_transformer.surgery import SurgeryConfig, Variant
 
-SPECIAL_TOKENS = ["<|endoftext|>", "<|im_start|>", "<|im_end|>", "<think>", "</think>"]
+SPECIAL_TOKENS = ["<|endoftext|>", "<|im_start|>", "<|im_end|>", THINK_OPEN, THINK_CLOSE]
+KEPT_ON_DECODE = [THINK_OPEN, THINK_CLOSE]
 CHAT_TEMPLATE = (
     "{% for message in messages %}"
     "{{ '<|im_start|>' + message['role'] + '\\n' + message['content'] + '<|im_end|>\\n' }}"
@@ -40,6 +42,7 @@ def toy_tokenizer(vocab_size: int = 400) -> PreTrainedTokenizerFast:
         initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),
     )
     tok.train_from_iterator(CORPUS, trainer)
+    tok.add_tokens([AddedToken(t, special=False, normalized=False) for t in KEPT_ON_DECODE])
     return PreTrainedTokenizerFast(
         tokenizer_object=tok,
         eos_token="<|im_end|>",

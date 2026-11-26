@@ -373,3 +373,13 @@ def test_score_keeps_problem_order_and_handles_missing_responses(
 
 def test_reference_response_is_none(loaded: Loaded) -> None:
     assert all(lcb.BENCHMARK.reference_response(p) is None for p in loaded.problems)
+
+
+def test_a_problem_with_no_tests_fails() -> None:
+    from evals.sandbox import RunResult
+
+    end = json.dumps({"event": "end", "results": []}).encode()
+    run = RunResult("ok", 0, "", "", 0.1, {lcb.RESULT_FILE: end})
+    assert lcb.verdict(run, 0, {})[0] is False
+    ones = json.dumps({"event": "end", "results": [True]}).encode()
+    assert lcb.verdict(RunResult("ok", 0, "", "", 0.1, {lcb.RESULT_FILE: ones}), 1, {})[0]

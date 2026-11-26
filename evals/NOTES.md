@@ -52,13 +52,20 @@ pueue add -g ct -- uv run --locked --no-sync python -m evals.run --model <checkp
   of their ids, so a larger N keeps every problem of a smaller one. `--resume` keeps the complete
   rows of an earlier `responses.jsonl` and generates only the missing problems; it refuses when
   the earlier report used another model or other generation settings (batch size and refill
-  aside). Together they let a sample grow, or widen to the whole benchmark, without redoing work.
+  aside), when the checkpoint's weights changed at the same path (a fingerprint of sampled
+  bytes), or when responses exist with no report to check them against. The report is written
+  before the first benchmark for that reason. Resumed benchmarks keep the earlier speed, batch
+  size and memory figures and add the top-up's. Together they let a sample grow, or widen to the
+  whole benchmark, without redoing work.
 - `--attention auto` (the default) routes attention through the harness's fused path. On the
   2080 Ti (compute capability 7.5) PyTorch's flash and cuDNN kernels need 8.0 or later and its
   memory-efficient kernel takes only fp16 and fp32 there, so plain bf16 attention would fall
   back to the math kernel; the fused path upcasts to fp32 instead. `--attention sdpa` or `eager`
   pick Hugging Face's own.
-- `--limit N` marks the report as a smoke run. `--score-only` rescores saved responses.
+- `--limit N` marks the report as a smoke run. `--score-only` rescores saved responses and keeps
+  the earlier report's sample, speed figures and thinking setting.
+- With `--no-thinking` the chat template puts an empty think block in the prompt, so responses
+  hold no think tags; scoring, leakage and `think_closed` read each response as that full turn.
   `--oracle` scores each benchmark's reference responses with no model, to check a scorer.
 - `--source math500=hf|github|<jsonl>`, `--source livecodebench=<dir of test*.jsonl>`; without a
   source, MATH500 and LiveCodeBench download from the Hugging Face Hub.
@@ -96,7 +103,9 @@ pueue add -g ct -- uv run --locked --no-sync python -m evals.run --model <checkp
   `find_zero` oracle never records a pass), so 163/164 is the ceiling for every arm. Details in
   `results/eval-scorer-checks/`.
 - CLI plumbing: a tiny random mode checkpoint with a toy tokenizer (`tools/tiny_checkpoint.py`)
-  through generation, mode tracking, scoring, `--score-only` and the separate arm.
+  through generation, mode tracking, scoring, `--score-only` and the separate arm. The toy
+  tokenizer keeps `<think>` and `</think>` when decoding, as Qwen3's is believed to (not checked
+  here), so CPU runs score responses whose thinking closed.
 
 ## Blocked here, and the defaults taken
 
@@ -127,6 +136,17 @@ pueue add -g ct -- uv run --locked --no-sync python -m evals.run --model <checkp
   kill-rule verdict (from `pilot.verdict`), tested on fake reports and run on the tiny CPU pilot.
   Its notes flag missing reports, smoke limits, CPU timings, and a `separate` arm decoded at
   batch 1 next to batched mode arms, which makes Table 5's tokens/s compare batch sizes.
+- The verdict and Table 1's mean average the planned benchmarks; an arm missing one is
+  incomplete. An eval counts only when it finished under the current plan and after its
+  checkpoint's last training; others are listed as not counted (failed, an earlier sample, or
+  retrained since), and a retrained arm's old eval directory is moved aside before it runs again.
+- `tools/eval_power.py --odds` gives the chance of each verdict by true gap. Because every seed
+  must clear 2 points, a true 2-point gap continues about 11% of the time at any sample size
+  (each seed is a coin flip on each margin), a 4-point gap about 86% at the planned standard
+  error, and a third seed makes the rule stricter rather than more sensitive. Its last columns
+  give the rule the sample was sized for, both seed-mean margins clearing a one-sided 5% test:
+  about 69% at a true 2-point gap with two seeds and 86% with three. Training noise between
+  seeds raises that rule's false continues, since its line counts only sampling error.
 - The pilot defaults to the verdict eval set: `sft`, `full`, `lora` and `moe` on a per-benchmark
   sample sized by `tools/eval_power.py` for a 2-point gap at two seeds, assuming the arms
   disagree on 10% of problems (361 MATH500, all 164 HumanEval+, 361 LiveCodeBench). After each

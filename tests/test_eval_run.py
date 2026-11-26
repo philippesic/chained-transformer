@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from chained_transformer.modes import THINK_CLOSE, THINK_OPEN
 from evals.run import main, read_jsonl
-from tools.tiny_checkpoint import build
+from tools.tiny_checkpoint import build, toy_tokenizer
 
 MATH_ROWS = [
     {"problem": "What is $2+2$?", "answer": "4", "unique_id": "t/1", "subject": "A", "level": 1},
@@ -103,6 +105,30 @@ def test_model_run_writes_consistent_report(
             assert sum(n for _, n in row["mode_runs"]) == row["new_tokens"]
             assert len(row["mode_runs"]) == row["switches"] + 1
         assert len(read_jsonl(tmp_path / name / "scores.jsonl")) == 2
+
+
+def test_think_tags_survive_decoding_as_qwen3_keeps_them() -> None:
+    tok = toy_tokenizer()
+    text = f"{THINK_OPEN}\nso{THINK_CLOSE}\n\n4"
+    ids = tok(text + tok.eos_token, add_special_tokens=False).input_ids
+    assert tok.decode(ids, skip_special_tokens=True) == text
+
+
+def test_closed_thinking_is_counted_from_the_decoded_text(
+    tmp_path: Path, data: dict[str, Path], models: dict[str, Path]
+) -> None:
+    report = _run(
+        data, tmp_path, "--model", str(models["plain1"]), extra=("--max-new-tokens", "24")
+    )
+    answered = []
+    for name in ("math500", "livecodebench"):
+        rows = read_jsonl(tmp_path / name / "responses.jsonl")
+        shut = [r for r in rows if THINK_CLOSE in r["text"]]
+        bench = report["benchmarks"][name]
+        assert bench["modes"]["think_closed_rate"] == len(shut) / len(rows)
+        assert bench["leakage"]["n_closed"] == len(shut)
+        answered += [r["tokens_by_mode"]["answer"] > 0 for r in shut]
+    assert any(answered)
 
 
 def test_auto_batch_size_fills_the_batch_on_cpu(
@@ -209,6 +235,13 @@ def test_resume_generates_only_what_is_missing(
     assert bench["perf"]["resumed"] == 1 and bench["n_scored"] == 2
     rows = read_jsonl(path)
     assert rows[0] == first[0] and len(rows) == 2
+    assert bench["perf"]["new_tokens"] == sum(r["new_tokens"] for r in rows)
+    again = _run(
+        data, tmp_path, "--model", str(models["full"]), extra=("--sample", "2", "--resume")
+    )
+    perf = again["benchmarks"]["math500"]["perf"]
+    assert perf["resumed"] == 2 and perf["batch_size"] == bench["perf"]["batch_size"]
+    assert perf["new_tokens"] == bench["perf"]["new_tokens"]
     with pytest.raises(SystemExit, match="different generation settings"):
         _run(
             data,
@@ -219,3 +252,77 @@ def test_resume_generates_only_what_is_missing(
         )
     with pytest.raises(SystemExit, match="different model"):
         _run(data, tmp_path, "--model", str(models["lora"]), extra=("--resume",))
+
+
+def test_resume_refuses_responses_it_cannot_check(
+    tmp_path: Path, data: dict[str, Path], models: dict[str, Path]
+) -> None:
+    model = tmp_path / "model"
+    shutil.copytree(models["full"], model)
+    _run(data, tmp_path / "out", "--model", str(model), extra=("--sample", "1"))
+    weights = next(model.glob("*.safetensors"))
+    raw = bytearray(weights.read_bytes())
+    raw[-8:] = bytes(8)
+    weights.write_bytes(bytes(raw))
+    with pytest.raises(SystemExit, match="retrained since"):
+        _run(data, tmp_path / "out", "--model", str(model), extra=("--resume",))
+    (tmp_path / "out" / "report.json").unlink()
+    with pytest.raises(SystemExit, match="left no report.json"):
+        _run(data, tmp_path / "out", "--model", str(model), extra=("--resume",))
+
+
+def test_score_only_keeps_speed_and_sample_and_reads_a_cut_off_line(
+    tmp_path: Path, data: dict[str, Path], models: dict[str, Path]
+) -> None:
+    first = _run(data, tmp_path, "--model", str(models["full"]), extra=("--sample", "1"))
+    path = tmp_path / "math500" / "responses.jsonl"
+    path.write_text(path.read_text() + '{"task_id": "cut off')
+    again = _run(data, tmp_path, "--score-only")
+    assert again["sample"] == first["sample"]
+    for name in ("math500", "livecodebench"):
+        perf = again["benchmarks"][name]["perf"]
+        assert perf["new_tokens"] == first["benchmarks"][name]["perf"]["new_tokens"]
+        assert again["benchmarks"][name]["n_problems"] == 1
+    path.unlink()
+    with pytest.raises(SystemExit, match="does not exist"):
+        _run(data, tmp_path, "--score-only")
+
+
+def test_no_thinking_responses_are_scored_as_answers(tmp_path: Path, data: dict[str, Path]) -> None:
+    out = tmp_path / "math500"
+    out.mkdir()
+    rows = [
+        {"task_id": "t/1", "text": "So 2+2 is \\boxed{4}.", "new_tokens": 5},
+        {"task_id": "t/2", "text": "It is \\boxed{8}.", "new_tokens": 4},
+    ]
+    full = [{**r, "finished": True, "tokens_by_mode": {}, "switches": 0} for r in rows]
+    (out / "responses.jsonl").write_text("".join(json.dumps(r) + "\n" for r in full))
+
+    def score(thinking: bool) -> dict[str, Any]:
+        report = {"generation": {"enable_thinking": thinking}}
+        (tmp_path / "report.json").write_text(json.dumps(report))
+        main(
+            [
+                "--score-only",
+                "--benchmarks",
+                "math500",
+                "--source",
+                f"math500={data['math']}",
+                "--device",
+                "cpu",
+                "--out",
+                str(tmp_path),
+            ]
+        )
+        result: dict[str, Any] = json.loads((tmp_path / "report.json").read_text())
+        return result["benchmarks"]["math500"]
+
+    off = score(False)
+    assert off["scores"]["accuracy"] == 0.5 and off["modes"]["think_closed_rate"] == 1.0
+    assert off["leakage"]["n_closed"] == 2
+    assert score(True)["scores"]["accuracy"] == 0.0
+
+
+def test_a_bad_sample_size_is_a_usage_error(tmp_path: Path, data: dict[str, Path]) -> None:
+    with pytest.raises(SystemExit, match="not 'math500=ten'"):
+        _run(data, tmp_path, "--oracle", extra=("--sample", "math500=ten"))

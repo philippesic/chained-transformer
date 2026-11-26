@@ -99,6 +99,61 @@ Evidence against, which the paper has to answer head-on:
 `python -m tools.pilot_report --root artifacts/pilot/NAME` prints Tables 1, 2, 4 and 5, the pass
 rate by switches for Figure 3 and the kill-rule verdict, and writes `results.md` and `results.json`.
 
+## Evaluation section, paragraph by paragraph
+
+1. **Benchmarks and scoring.** MATH500 scores only the answer after `</think>` with math-verify
+   (the lenient score over the whole response is a leakage diagnostic, not a result);
+   HumanEval+ with evalplus 0.3.1, plus as the primary and base alongside; LiveCodeBench
+   `release_v5`, contest dates 2024-10-01 to 2025-02-01 (880 problems), stdin and functional tests
+   in a sandbox. The primary metric is mean accuracy over the three, in points. HumanEval+ grades
+   code inside unfinished thinking and the other two do not, so give each arm's unclosed-think rate
+   beside its scores.
+2. **Decoding.** Greedy for every arm, the same chat template with thinking on, at most the
+   training sequence length in new tokens. Batched and one-at-a-time greedy outputs match on CPU
+   (tests); bf16 on the GPU can differ by batch, so say which batch each arm ran at.
+3. **Verdict sample, then the full suite.** The kill rule was judged on a fixed hash-ranked
+   sample sized for a per-seed standard error of 1.14 points at an assumed discordance of 0.10
+   (361 / 164 / 361 problems), grown when the first arms disagreed more. The tables use the full
+   suite after `pilot widen`. Report both, and that the verdict came before widening.
+4. **The rule and its odds.** State the rule exactly as fixed, then its operating
+   characteristics from `python -m tools.eval_power --odds`: requiring both margins to clear
+   2 points on every seed, with a per-seed SE of 1.14 and the two margins correlated at about 0.5,
+   a true 2-point gap gives continue 11%, mixed 44%, kill 44%; a 3-point gap continues 49%, a
+   4-point gap 86%. More problems do not change the 2-point case, and a third seed makes the rule
+   stricter. A reader will compute this, so the paper says it first.
+5. **Uncertainty.** Each margin gets a paired standard error from per-problem pass or fail,
+   pooled over benchmarks (Table 2). Two seeds give no seed-level interval, so both seeds are
+   shown everywhere.
+6. **Fairness.** Same rows in the same order, equal steps and tokens per arm; total and active
+   parameters for each arm; `moe` at top-2 and top-1; `separate` re-prefills at each switch.
+7. **Hardware.** Which GPU, bf16 with fp32 attention on cards older than sm80, and that speed
+   compares only at equal batch size.
+
+## Results section, paragraph by paragraph
+
+Every number in the text comes from `results.json` (`tools/pilot_report.py`) and appears in a
+table.
+
+1. **Verdict.** The first sentence is continue, mixed or kill, with `full - sft` and
+   `full - moe` per seed and their standard errors (Table 2).
+   - Continue: claim 1 holds at this scale; go on to the upgrade (paragraph 6).
+   - Mixed: give both seeds and say the rule does not decide. What a mixed result means was not
+     fixed before the runs; decide it before the pilot (a third seed under a pooled rule, or
+     treat it as kill).
+   - Kill: say so plainly. The paper becomes a negative result: which arm matched `full`, by how
+     much, and whether that held on both seeds.
+2. **LoRA.** `lora - full` per seed; within 1 point on every seed means the result is LoRA modes.
+3. **Where the gain is.** Table 1 by benchmark: math against code, answer leakage per arm, and
+   whether the gain survives in the unclosed-think rate.
+4. **Switching.** Table 4 and Figure 3: do the arms switch like the data, pass rate by number of
+   switches, and fences opened in prose.
+5. **Serving.** Table 5: re-prefilled tokens and tokens/s, modes against `separate`, at matched
+   batch size.
+6. **Upgrade.** Table 3, only after a continue: the retrained mode's gain and the other modes'
+   change against continued `sft`.
+7. **Sample against full suite.** If the full-suite margins would have given a different verdict
+   than the sample did, say so and give both.
+
 ## Threats to validity
 
 - Equal tokens is not equal parameters: `full` holds 1.89 times the base parameters with the
@@ -108,5 +163,7 @@ rate by switches for Figure 3 and the kill-rule verdict, and writes `results.md`
 - Self-emitted routing can misfire. Count fences in think text and switches that never close.
 - Small scale (0.6B, two seeds) and greedy decoding; say so and add sampled runs if the result
   holds.
+- The kill rule needs every seed to clear the line, so at a true gap of exactly 2 points it
+  continues about one time in nine; report its odds (`eval_power --odds`) next to the verdict.
 - The upgrade's zero drift before the first switch is structural (causal attention), not a
   finding; the result is the drift after it.

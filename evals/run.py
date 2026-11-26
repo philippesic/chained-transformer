@@ -15,7 +15,7 @@ from typing import Any
 import torch
 
 from chained_transformer.attention import ATTENTION_CHOICES
-from chained_transformer.modes import MODE_NAMES
+from chained_transformer.modes import MODE_NAMES, THINK_CLOSE, THINK_OPEN
 from chained_transformer.train import configure_allocator
 from evals import humanevalplus, livecodebench, math500
 from evals.generation import Generation, GenSettings, Runner, generate_all, load_runner
@@ -32,6 +32,9 @@ DTYPES = {"float32": torch.float32, "bfloat16": torch.bfloat16}
 REPORT_VERSION = 1
 SAMPLE_SALT = "chained-transformer-eval-sample-v1"
 RESUME_IGNORES = ("batch_size", "refill")
+EMPTY_THINKING = f"{THINK_OPEN}\n\n{THINK_CLOSE}\n\n"
+SUMMED_PERF = ("seconds", "new_tokens", "generate_calls", "attention_math_fallbacks")
+FINGERPRINT_READS = 16
 
 
 def git_state() -> dict[str, Any]:
@@ -60,6 +63,52 @@ def environment(device: str) -> dict[str, Any]:
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def write_json(path: Path, data: Any) -> None:
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    tmp.replace(path)
+
+
+def as_turn(text: str, thinking: bool) -> str:
+    return text if thinking or THINK_CLOSE in text else EMPTY_THINKING + text
+
+
+def weights_fingerprint(paths: Sequence[str]) -> str | None:
+    digest = hashlib.sha256()
+    for path in paths:
+        root = Path(path)
+        files = sorted(root.glob("*.safetensors")) or sorted(root.glob("*.bin"))
+        if not files:
+            return None
+        for f in files:
+            size = f.stat().st_size
+            digest.update(f"{f.name}:{size}".encode())
+            with f.open("rb") as fh:
+                for i in range(FINGERPRINT_READS):
+                    fh.seek(size * i // FINGERPRINT_READS)
+                    digest.update(fh.read(1 << 16))
+    return digest.hexdigest()[:16]
+
+
+def merge_perf(old: dict[str, Any] | None, new: dict[str, Any]) -> dict[str, Any]:
+    old = {k: v for k, v in (old or {}).items() if k not in ("resumed", "scoring_seconds")}
+    if not old.get("new_tokens"):
+        return new
+    if not new.get("new_tokens"):
+        return old
+    bulk = old if old["new_tokens"] >= new["new_tokens"] else new
+    out = {**new, "batch_size": bulk.get("batch_size"), "refill": bulk.get("refill")}
+    for key in SUMMED_PERF:
+        out[key] = (old.get(key) or 0) + (new.get(key) or 0)
+    out["seconds"] = round(out["seconds"], 2)
+    out["tokens_per_s"] = round(out["new_tokens"] / out["seconds"], 2) if out["seconds"] else 0.0
+    for key in ("peak_alloc_gib", "peak_rss_gib"):
+        peaks = [p[key] for p in (old, new) if p.get(key) is not None]
+        if peaks:
+            out[key] = max(peaks)
+    return out
 
 
 def write_jsonl(path: Path, rows: Sequence[dict[str, Any]]) -> None:
@@ -94,7 +143,10 @@ def parse_sample(items: Sequence[str], names: Sequence[str]) -> dict[str, int]:
             raise SystemExit(
                 f"--sample takes N or benchmark=N with a benchmark in {list(BENCHMARKS)}"
             )
-        n = int(value)
+        try:
+            n = int(value)
+        except ValueError:
+            raise SystemExit(f"--sample takes N or benchmark=N, not {item!r}") from None
         if n < 1:
             raise SystemExit("--sample sizes must be at least 1")
         for target in [name] if sep else names:
@@ -102,13 +154,17 @@ def parse_sample(items: Sequence[str], names: Sequence[str]) -> dict[str, int]:
     return sizes
 
 
-def resume_mismatch(previous: dict[str, Any], model: Any, generation: dict[str, Any]) -> list[str]:
+def resume_mismatch(
+    previous: dict[str, Any], model: Any, generation: dict[str, Any], weights: str | None = None
+) -> list[str]:
     def comparable(settings: dict[str, Any] | None) -> dict[str, Any]:
         return {k: v for k, v in (settings or {}).items() if k not in RESUME_IGNORES}
 
     problems = []
     if previous.get("model") != model:
         problems.append("model")
+    elif previous.get("weights") and weights and previous["weights"] != weights:
+        problems.append("checkpoint (retrained since)")
     if comparable(previous.get("generation")) != comparable(generation):
         problems.append("generation settings")
     return problems
@@ -118,11 +174,11 @@ def _mean(values: Sequence[float]) -> float | None:
     return round(statistics.fmean(values), 4) if values else None
 
 
-def mode_stats(generations: Sequence[Generation]) -> dict[str, Any]:
+def mode_stats(generations: Sequence[Generation], thinking: bool = True) -> dict[str, Any]:
     n = len(generations)
     if n == 0:
         return {"n": 0}
-    closed = [split(g.text).think_closed for g in generations]
+    closed = [split(as_turn(g.text, thinking)).think_closed for g in generations]
     return {
         "n": n,
         "mean_new_tokens": _mean([g.new_tokens for g in generations]),
@@ -176,15 +232,20 @@ def run_benchmark(
     score_only: bool,
     oracle: bool,
     resume: bool = False,
+    thinking: bool = True,
+    previous_perf: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     bench = BENCHMARKS[name]
     out.mkdir(parents=True, exist_ok=True)
     responses_path = out / "responses.jsonl"
     perf: dict[str, Any] = {}
     if score_only:
-        generations = [generation_from_row(r) for r in read_jsonl(responses_path)]
+        if not responses_path.exists():
+            raise SystemExit(f"--score-only: {responses_path} does not exist")
+        generations = [generation_from_row(r) for r in read_complete_jsonl(responses_path)]
         wanted = {p.task_id for p in loaded.problems}
         generations = [g for g in generations if g.task_id in wanted]
+        perf = merge_perf(previous_perf, {})
     elif oracle:
         generations = []
         for p in loaded.problems:
@@ -209,10 +270,12 @@ def run_benchmark(
 
         fresh, perf = generate_all(runner, todo, settings, save)
         sink.close()
+        if kept:
+            perf = merge_perf(previous_perf, perf)
         wanted = {p.task_id for p in loaded.problems}
         generations = [g for g in kept if g.task_id in wanted] + fresh
         perf["resumed"] = len(generations) - len(fresh)
-    texts = {g.task_id: g.text for g in generations}
+    texts = {g.task_id: as_turn(g.text, thinking) for g in generations}
     problems: list[Problem] = [p for p in loaded.problems if p.task_id in texts]
     start = time.perf_counter()
     scores = bench.score(problems, texts, out / "work", workers)
@@ -237,8 +300,8 @@ def run_benchmark(
         "n_problems": len(loaded.problems),
         "n_scored": len(scores),
         "scores": score_summary(name, scores),
-        "leakage": aggregate([g.text for g in generations]),
-        "modes": mode_stats(generations),
+        "leakage": aggregate(list(texts.values())),
+        "modes": mode_stats(generations, thinking),
         "perf": {**perf, "scoring_seconds": scoring_s},
     }
 
@@ -329,35 +392,47 @@ def main(argv: list[str] | None = None) -> None:
     sources = parse_sources(args.source)
     sample = parse_sample(args.sample, args.benchmarks)
     runner = None
+    weights = None
     if args.model or args.separate:
         runner = load_runner(
             args.model, args.separate, args.tokenizer, dtype, args.device, args.attention
         )
+        weights = weights_fingerprint(args.separate or [args.model])
     args.out.mkdir(parents=True, exist_ok=True)
     report_path = args.out / "report.json"
     keep_previous = args.score_only or args.resume
     previous = json.loads(report_path.read_text()) if keep_previous and report_path.exists() else {}
-    if args.resume and previous and runner is not None:
-        differs = resume_mismatch(previous, runner.spec, asdict(settings))
+    if args.resume and runner is not None:
+        if previous:
+            differs = resume_mismatch(previous, runner.spec, asdict(settings), weights)
+        else:
+            held = [n for n in args.benchmarks if (args.out / n / "responses.jsonl").exists()]
+            differs = ["run that left no report.json to check"] if held else []
         if differs:
             raise SystemExit(
                 f"--resume: {args.out} holds responses from a different {' and '.join(differs)}; "
                 "use a new --out"
             )
+    if args.score_only and not sample and previous.get("sample"):
+        sample = {b: n for b, n in previous["sample"]["sizes"].items() if b in args.benchmarks}
+    generation = (
+        asdict(settings) if not (args.oracle or args.score_only) else previous.get("generation")
+    )
+    thinking = bool((generation or {}).get("enable_thinking", settings.enable_thinking))
     report: dict[str, Any] = {
         "report_version": REPORT_VERSION,
         "kind": "oracle" if args.oracle else "model",
         "smoke": args.limit is not None,
         "sample": {"sizes": sample, "salt": SAMPLE_SALT} if sample else None,
         "model": runner.spec if runner else previous.get("model"),
-        "generation": asdict(settings)
-        if not (args.oracle or args.score_only)
-        else previous.get("generation"),
+        "weights": weights if runner else previous.get("weights"),
+        "generation": generation,
         "git": git_state(),
         "environment": environment(args.device),
         "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "benchmarks": dict(previous.get("benchmarks", {})),
     }
+    write_json(report_path, report)
     for name in args.benchmarks:
         loaded = BENCHMARKS[name].load(args.limit, sources.get(name))
         available = len(loaded.problems)
@@ -373,13 +448,15 @@ def main(argv: list[str] | None = None) -> None:
             args.score_only,
             args.oracle,
             args.resume,
+            thinking,
+            report["benchmarks"].get(name, {}).get("perf"),
         )
         result["n_available"] = available
         report["benchmarks"][name] = result
-        report_path.write_text(json.dumps(report, indent=2) + "\n")
+        write_json(report_path, report)
         print(name, json.dumps(report["benchmarks"][name]["scores"]), flush=True)
     report["finished"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    report_path.write_text(json.dumps(report, indent=2) + "\n")
+    write_json(report_path, report)
 
 
 if __name__ == "__main__":
