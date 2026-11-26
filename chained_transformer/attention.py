@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import warnings
-from typing import Any
+from typing import Any, cast
 
 import torch
 import torch.nn.functional as F
@@ -52,25 +52,31 @@ def fused_sdpa(
     is_causal = q_len > 1 and attention_mask is None and is_causal
     if is_causal and key.shape[2] > q_len:
         key, value = key[:, :, :q_len], value[:, :, :q_len]
-    args = (query, key, value)
-    kwargs_sdpa = {
-        "attn_mask": attention_mask,
-        "dropout_p": dropout if module.training else 0.0,
-        "scale": scaling,
-        "is_causal": is_causal,
-    }
+    dropout_p = dropout if module.training else 0.0
+
+    def attend(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+        return F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            attn_mask=attention_mask,
+            dropout_p=dropout_p,
+            scale=scaling,
+            is_causal=is_causal,
+        )
+
     if not query.is_cuda:
-        out = F.scaled_dot_product_attention(*args, **kwargs_sdpa)
+        out = attend(query, key, value)
     else:
         try:
             with sdpa_kernel(FUSED_BACKENDS):
-                out = F.scaled_dot_product_attention(*args, **kwargs_sdpa)
+                out = attend(query, key, value)
         except RuntimeError as err:
             reason = f"{tuple(query.shape)} {query.dtype} mask={attention_mask is not None}: {err}"
             if not FALLBACKS:
                 warnings.warn(f"fused attention fell back to math: {reason}", stacklevel=2)
             FALLBACKS.append(reason)
-            out = F.scaled_dot_product_attention(*args, **kwargs_sdpa)
+            out = attend(query, key, value)
     return out.to(dtype).transpose(1, 2).contiguous(), None
 
 
@@ -95,7 +101,7 @@ def use_attention(model: nn.Module, choice: str) -> None:
     if callable(setter):
         setter(name)
     else:
-        model.config._attn_implementation = name
+        cast(Any, model).config._attn_implementation = name
 
 
 def attention_backend(model: nn.Module) -> str:

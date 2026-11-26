@@ -104,6 +104,16 @@ class ChunkedAdamW8bit(Optimizer):
             self._generators[device] = torch.Generator(device=device).manual_seed(self.seed)
         return self._generators[device]
 
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
+        super().load_state_dict(state_dict)
+        saved = state_dict["state"]
+        ids = [i for group in state_dict["param_groups"] for i in group["params"]]
+        params = [p for group in self.param_groups for p in group["params"]]
+        for i, p in zip(ids, params, strict=True):
+            for key, value in saved.get(i, {}).items():
+                if isinstance(value, Tensor) and key != "step":
+                    self.state[p][key] = value.to(device=p.device).clone()
+
     def _init_state(self, p: Tensor) -> dict[str, Any]:
         state: dict[str, Any] = {"step": 0}
         if _quantizable(p):
@@ -170,7 +180,7 @@ class ChunkedAdamW8bit(Optimizer):
                 m = state["m"][start:end]
                 v = state["v"][start:end]
             m.lerp_(g, 1 - beta1)
-            v.lerp_(g.square_(), 1 - beta2)
+            v.lerp_(g * g, 1 - beta2)
             denom = v.sqrt().div_(bc2_sqrt).add_(eps)
             pf = flat_p[start:end].float()
             if wd:

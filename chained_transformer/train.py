@@ -10,7 +10,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import torch
 import torch.nn.functional as F
@@ -18,6 +18,7 @@ from datasets import load_from_disk
 from torch import nn
 from torch.optim import Optimizer
 from torch.utils.checkpoint import checkpoint
+from transformers import PreTrainedModel
 from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 
 from chained_transformer.attention import (
@@ -96,9 +97,8 @@ def configure_trainable(
             if isinstance(module, LoRALinear):
                 module.base.weight.requires_grad_(False)
     if freeze_embeddings:
-        embeddings = model.get_input_embeddings()
-        head = model.get_output_embeddings()
-        for module in (embeddings, head):
+        hf = cast(PreTrainedModel, model)
+        for module in (hf.get_input_embeddings(), hf.get_output_embeddings()):
             if isinstance(module, nn.Module):
                 for p in module.parameters():
                     p.requires_grad_(False)
@@ -133,8 +133,10 @@ def set_lr(optimizer: Optimizer, lr: float) -> None:
 
 
 def configure_allocator() -> None:
-    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", ALLOC_CONF)
-    os.environ.setdefault("PYTORCH_ALLOC_CONF", ALLOC_CONF)
+    names = ("PYTORCH_ALLOC_CONF", "PYTORCH_CUDA_ALLOC_CONF")
+    if not any(os.environ.get(name) for name in names):
+        for name in names:
+            os.environ[name] = ALLOC_CONF
 
 
 def lr_at(step: int, steps: int, warmup: int, peak: float) -> float:
@@ -164,7 +166,11 @@ def parse_mode(name: str | None) -> int | None:
     return None if name is None else int(Mode[name.upper()])
 
 
-def main(argv: list[str] | None = None, on_phase: PhaseHook | None = None) -> None:
+def main(
+    argv: list[str] | None = None,
+    on_phase: PhaseHook | None = None,
+    on_model: Callable[[nn.Module], None] | None = None,
+) -> None:
     configure_allocator()
     phase = on_phase or (lambda name: None)
     parser = argparse.ArgumentParser(description="Train one experiment arm")
@@ -214,6 +220,8 @@ def main(argv: list[str] | None = None, on_phase: PhaseHook | None = None) -> No
         lora_rank=args.lora_rank, lora_alpha=2.0 * args.lora_rank, moe_top_k=args.moe_top_k
     )
     built = build(model, args.arm, cfg)
+    if on_model is not None:
+        on_model(model)
     configure_trainable(model, args.arm, parse_mode(args.only_mode), args.freeze_embeddings)
     if not args.no_grad_ckpt:
         model.activation_checkpointing_enable({"use_reentrant": False})

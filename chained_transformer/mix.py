@@ -229,7 +229,7 @@ CANDIDATES: dict[str, MixPolicy] = {
 def compare_policies(
     rows: Sequence[RowProfile], policies: dict[str, MixPolicy], seed: int
 ) -> dict[str, object]:
-    out = {}
+    out: dict[str, object] = {}
     for name, policy in policies.items():
         picked = [rows[i] for i in select(rows, policy, None, seed)]
         shares = None if policy.domain_token_shares is None else dict(policy.domain_token_shares)

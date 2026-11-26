@@ -82,7 +82,8 @@ It runs each arm for 3 steps in its own process, records peak allocated and rese
 phase (setup, forward, backward, optimizer) and the phase that ran out of memory, compares
 with the estimate and exits 1 if anything overflows. `--harness current-turing` reproduces the
 old setup for a before/after. The CPU lane (`--device cpu --layers 2`) counts live tensor bytes
-with a dispatch-mode tracker and is for calibrating the estimate's coefficients.
+with a dispatch-mode tracker and is for calibrating the estimate's coefficients on the fixed
+harness; it cannot see inside torchao's tensor subclasses, so it is no use for the old one.
 
 ## 2. MoE drift in bf16
 

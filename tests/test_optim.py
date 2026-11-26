@@ -49,13 +49,13 @@ def _regression(seed: int) -> tuple[torch.Tensor, torch.Tensor]:
     g = torch.Generator().manual_seed(seed)
     x = torch.randn(64, 32, generator=g)
     w = torch.randn(32, 16, generator=g)
-    return x, x @ w
+    return x, x @ w * 0.1
 
 
 def _run(opt_factory: object, steps: int, dtype: torch.dtype = torch.float32) -> list[float]:
     torch.manual_seed(0)
     layer = torch.nn.Linear(32, 16 * 512, bias=False).to(dtype)
-    head = torch.ones(16 * 512, 16, dtype=dtype) / 512
+    head = torch.eye(16, dtype=dtype).repeat_interleave(512, 0) / 512
     opt = opt_factory(layer.parameters())  # type: ignore[operator]
     x, y = _regression(0)
     losses = []
@@ -77,8 +77,13 @@ def test_chunked_adamw8bit_tracks_fp32_adamw() -> None:
 
 
 def test_chunk_size_does_not_change_the_result() -> None:
-    a = _run(lambda p: ChunkedAdamW8bit(p, lr=1e-2, chunk_numel=BLOCK), 5)
-    b = _run(lambda p: ChunkedAdamW8bit(p, lr=1e-2, chunk_numel=BLOCK * 4096), 5)
+    threads = torch.get_num_threads()
+    torch.set_num_threads(1)
+    try:
+        a = _run(lambda p: ChunkedAdamW8bit(p, lr=1e-2, chunk_numel=BLOCK), 5)
+        b = _run(lambda p: ChunkedAdamW8bit(p, lr=1e-2, chunk_numel=BLOCK * 4096), 5)
+    finally:
+        torch.set_num_threads(threads)
     assert a == b
 
 
@@ -98,4 +103,27 @@ def test_small_params_keep_fp32_state_and_state_dict_round_trips() -> None:
     clone = ChunkedAdamW8bit([p, big], lr=0.1)
     clone.load_state_dict(opt.state_dict())
     assert torch.equal(clone.state[big]["m_codes"], opt.state[big]["m_codes"])
+    assert clone.state[big]["m_codes"].dtype == torch.uint8
+    assert clone.state[big]["m_scale"].dtype == torch.float32
+    assert clone.state[p]["v"].dtype == torch.float32
     assert clone.state[big]["step"] == 1
+
+
+def test_state_dict_round_trip_keeps_state_dtypes_for_bf16_params() -> None:
+    big = torch.nn.Parameter(torch.ones(BLOCK * 16, dtype=torch.bfloat16))
+    small = torch.nn.Parameter(torch.ones(10, dtype=torch.bfloat16))
+    opt = ChunkedAdamW8bit([big, small], lr=0.1)
+    (big.float().sum() + small.float().sum()).backward()
+    opt.step()
+    clone = ChunkedAdamW8bit([big, small], lr=0.1)
+    clone.load_state_dict(opt.state_dict())
+    assert clone.state[big]["v_codes"].dtype == torch.uint8
+    assert clone.state[big]["v_scale"].dtype == torch.float32
+    assert clone.state[small]["m"].dtype == torch.float32
+
+
+def test_fp32_grads_are_left_untouched_by_the_step() -> None:
+    p = torch.nn.Parameter(torch.ones(BLOCK * 16))
+    p.grad = torch.full_like(p, 3.0)
+    ChunkedAdamW8bit([p], lr=0.1).step()
+    assert torch.equal(p.grad, torch.full_like(p, 3.0))

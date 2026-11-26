@@ -170,7 +170,7 @@ def run_single(args: argparse.Namespace) -> dict[str, Any]:
 
             tracker = LiveBytes()
             with turing_emulation(emulate), tracker:
-                train_main(argv, on_phase=tracker.set_phase)
+                train_main(argv, on_phase=tracker.set_phase, on_model=tracker.track_module)
             measured = tracker.summary()
         else:
             phases = CudaPhases()

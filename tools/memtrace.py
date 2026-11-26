@@ -51,7 +51,13 @@ class LiveBytes(TorchDispatchMode):
                 self._track(t, str(func.__name__))
         return out
 
+    def track_module(self, module: torch.nn.Module) -> None:
+        for t in [*module.parameters(), *module.buffers()]:
+            self._track(t, "module")
+
     def _track(self, t: torch.Tensor, op: str) -> None:
+        if t.device.type == "meta":
+            return
         storage = t.untyped_storage()
         key = storage._cdata
         if key in self.live:

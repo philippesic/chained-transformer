@@ -20,3 +20,13 @@ def test_live_bytes_tracks_allocations_frees_and_phase_peaks() -> None:
     assert view.untyped_storage().nbytes() == 1 << 20
     del x, z, view
     assert tracker.current == 0
+
+
+def test_live_bytes_counts_existing_module_weights_once_and_skips_meta() -> None:
+    layer = torch.nn.Linear(256, 256, bias=False)
+    tracker = LiveBytes()
+    with tracker:
+        tracker.track_module(layer)
+        tracker.track_module(layer)
+        torch.empty(1 << 20, device="meta")
+    assert tracker.current == 256 * 256 * 4
