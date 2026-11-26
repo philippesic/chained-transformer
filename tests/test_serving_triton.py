@@ -64,3 +64,37 @@ def test_grouped_matmul_matches_per_token_weights() -> None:
     want = torch.bmm(w[ids], x.unsqueeze(-1)).squeeze(-1)
     got = triton_grouped.grouped_matmul(x, w, ids, block_m=16, block_n=16, block_k=16)
     torch.testing.assert_close(got, want, rtol=1e-4, atol=1e-5)
+
+
+def test_float32_inputs_use_exact_dots() -> None:
+    assert triton_grouped.dot_precision(torch.zeros(1, dtype=torch.float32)) == "ieee"
+    assert triton_grouped.dot_precision(torch.zeros(1, dtype=torch.float16)) == "tf32"
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ("dtype", "tl.dot needs both the same dtype"),
+        ("ids_len", "mode_ids must be \\[tokens\\]"),
+        ("ids_float", "integer tensor"),
+        ("features", "features but the weights expect"),
+        ("block", "power of two of at least 16"),
+    ],
+)
+def test_triton_mlp_rejects_bad_inputs(change: str, message: str) -> None:
+    w = weights(7, 3, 64, 64, torch.float32)
+    x = torch.randn(9, 64).to(DEVICE)
+    ids = mode_ids("mixed", 9, 8)
+    block = 16
+    if change == "dtype":
+        x = x.to(torch.float16)
+    elif change == "ids_len":
+        ids = ids[:5]
+    elif change == "ids_float":
+        ids = ids.float()
+    elif change == "features":
+        x = x[:, :32]
+    else:
+        block = 24
+    with pytest.raises(ValueError, match=message):
+        triton_grouped.grouped_mode_mlp(x, ids, w, block_m=16, block_n=block, block_k=32)

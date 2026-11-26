@@ -15,6 +15,7 @@ from serving.tiny import TINY_PROMPTS, tiny_chained_model, tiny_greedy, tiny_tok
 vllm = pytest.importorskip("vllm")
 
 NEW_TOKENS = 24
+GPU_MEMORY = 0.2
 LONG_BASE = [0, 1, *range(6, 30), 4, 2, 4, *range(30, 60), 4, 3, *range(10, 20)]
 LONG_PROMPTS = [[*LONG_BASE, k] for k in (20, 21, 22, 23)]
 
@@ -53,6 +54,7 @@ def llm(
         block_size=32,
         enable_prefix_caching=True,
         seed=0,
+        gpu_memory_utilization=GPU_MEMORY,
         hf_overrides={
             "mode_tracking": {
                 "prompt_mode": 0,
@@ -76,13 +78,38 @@ def run(engine: Any, prompts: list[list[int]]) -> tuple[list[str], list[list[int
     return [o.request_id for o in outs], [list(o.outputs[0].token_ids) for o in outs]
 
 
+def triton_runs_here() -> bool:
+    from vllm.platforms import current_platform
+
+    return current_platform.is_cuda()
+
+
 def worker_stats(engine: Any) -> dict[str, Any]:
     from serving.vllm_plugin.state import collect_traces
 
     return engine.collective_rpc(collect_traces)[0]
 
 
-@pytest.mark.parametrize("impl", ["select", "loop"])
+def test_vllm_uses_mode_state_and_stacked_weights(llm: Any) -> None:
+    from serving.vllm_plugin.state import runner_report
+
+    report = llm.collective_rpc(runner_report)[0]
+    assert report["model_state"] == "ModeModelState", report
+    assert report["mode_mlps"] == 2, report
+    assert report["stacking_problems"] == [], report
+
+
+@pytest.mark.parametrize(
+    "impl",
+    [
+        "select",
+        "loop",
+        pytest.param(
+            "triton",
+            marks=pytest.mark.skipif(not triton_runs_here(), reason="needs a CUDA GPU"),
+        ),
+    ],
+)
 def test_vllm_greedy_matches_hf_with_mixed_batches(
     llm: Any, tiny: tuple[Qwen3ForCausalLM, Routing], impl: str
 ) -> None:

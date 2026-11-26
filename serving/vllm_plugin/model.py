@@ -41,6 +41,11 @@ class VllmModeMLP(nn.Module):
         self, config: Any, quant_config: Any, prefix: str, num_modes: int, impl: str
     ) -> None:
         super().__init__()
+        if impl == "triton" and quant_config is not None:
+            raise NotImplementedError(
+                "mlp_impl 'triton' reads unquantized stacked weights; serve a quantized "
+                "checkpoint with mlp_impl 'select'"
+            )
         self.modes = nn.ModuleList(
             Qwen3MLP(
                 hidden_size=config.hidden_size,
@@ -64,9 +69,35 @@ class VllmModeMLP(nn.Module):
         self._stacked = StackedWeights(gate_up, down)
         return self._stacked
 
+    def stacking_problems(self) -> list[str]:
+        if self._stacked is None:
+            return ["mode weights were not stacked after loading"]
+        problems = []
+        for i, m in enumerate(self.modes):
+            for name, whole in (
+                ("gate_up_proj.weight", self._stacked.gate_up),
+                ("down_proj.weight", self._stacked.down),
+            ):
+                weight = m.get_parameter(name)
+                if weight.numel() == 0:
+                    continue
+                if weight.data_ptr() != whole[i].data_ptr():
+                    problems.append(
+                        f"mode {i} {name} no longer shares memory with the stacked weights; "
+                        "vLLM replaced it after loading, so the triton impl would use stale "
+                        "weights"
+                    )
+                elif weight.device != whole.device or weight.dtype != whole.dtype:
+                    problems.append(f"mode {i} {name} is {weight.dtype} on {weight.device}")
+        return problems
+
     def stacked(self) -> StackedWeights:
         if self._stacked is None:
-            raise RuntimeError("mode weights were not stacked after loading")
+            raise RuntimeError(
+                "mode weights were not stacked after loading: "
+                "ChainedQwen3ForCausalLM.load_weights stacks them, so the model was loaded "
+                "some other way"
+            )
         return self._stacked
 
     def forward(self, x: torch.Tensor, mode_ids: torch.Tensor | None) -> torch.Tensor:
@@ -151,6 +182,12 @@ class ChainedQwen3Model(Qwen2Model):
         inputs_embeds: torch.Tensor | None = None,
         mode_ids: torch.Tensor | None = None,
     ) -> torch.Tensor | IntermediateTensors:
+        if mode_ids is None:
+            raise RuntimeError(
+                "ChainedQwen3ForCausalLM got no mode_ids. vLLM passes them only through "
+                "ModeModelState, which Model Runner V2 picks up from get_model_state_cls; "
+                "this runner did not. Use vLLM 0.34 with its default GPU runner."
+            )
         if get_pp_group().is_first_rank:
             if inputs_embeds is not None:
                 hidden_states = inputs_embeds

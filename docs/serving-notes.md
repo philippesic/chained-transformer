@@ -64,6 +64,39 @@ vocabulary) whose outputs depend on routing.
   fine-tunes with re-prefill made 5 switches and re-prefilled 67 tokens for 4 prompts. Timings
   on a 128-wide model on CPU say nothing about GPU performance.
 
+## First GPU run
+
+Run the whole list in one go and read one report:
+
+```sh
+uv run --locked --no-sync python -m tools.serving_gpu_checklist
+```
+
+It refuses to start while another process uses the GPU (queue it in pueue's `gpu` group),
+then runs `tools.check`, the Triton tests on the GPU, `tools.bench_mode_mlp` with its CUDA graph
+check, the vLLM engine tests (eager, then compiled with CUDA graphs) in the vLLM virtualenv,
+`tools.bench_vllm`, `tools.bench_paging` and `tools.bench_serving`. Each step gets a log, and
+`report.md` in `artifacts/serving/gpu-checklist/<time>/` gives pass, fail, warn or not run per
+step, with the log tail and what a failure means. A vLLM test that skips on the GPU counts as a
+failure. `--only`, `--skip` and `--model tiny` narrow it; `--dry-run` prints the commands.
+
+Changes made for that run, all checked on CPU:
+
+- Float32 Triton dots use `input_precision="ieee"`. Triton defaults to TF32 on Ampere and newer,
+  which would have failed the float32 kernel tests and the float32 vLLM test on the 5080.
+- The kernel checks shapes, dtypes, devices and block sizes before launching, and refuses
+  bfloat16 below compute capability 8.0 with a message to serve in float16 (the 2080 Ti).
+  `num_tokens` is not specialised, so new batch sizes do not recompile the kernel.
+- The model raises when vLLM calls it without `mode_ids`, instead of decoding everything in
+  `think`; the model state raises on modes outside `0..M-1` before they reach the GPU.
+- `register()` names the vLLM version when Model Runner V2's model states are missing.
+- `serving.vllm_plugin.state.runner_report` (for `collective_rpc`) reports the model state
+  class, MLP impls, compile and CUDA graph modes, and whether the stacked weights still share
+  memory with each mode's weights after vLLM's processing.
+- The vLLM engine tests cap `gpu_memory_utilization` at 0.2 instead of vLLM's 0.9, run the
+  Triton impl on CUDA, and `tests/test_serving_vllm_graphs.py` adds a compiled, CUDA-graph
+  engine with the Triton impl checked against Hugging Face at three batch sizes.
+
 ## Not verified
 
 - vLLM's own engine driving the plugin: its scheduler, GPU model runner and sampler calling
@@ -71,6 +104,7 @@ vocabulary) whose outputs depend on routing.
   `tests/test_serving_vllm.py` checks exactly that and needs a GPU (or triton-cpu).
 - `VLLM_COMPILE` piecewise compilation and CUDA graph capture and replay with `mode_ids`. The CPU
   platform forces `DYNAMO_TRACE_ONCE` and has no CUDA graphs.
+  `tests/test_serving_vllm_graphs.py` checks this on a GPU.
 - The Triton kernel on a GPU: correctness in compiled mode, block sizes and speed on the 2080 Ti
   and 5080.
 - Loading the plugin in vLLM worker processes through the `vllm.general_plugins` entry point.

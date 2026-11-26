@@ -480,6 +480,58 @@ def test_dummy_batches_get_think_modes(
     assert state.steps == 0
 
 
+def test_model_refuses_to_run_without_mode_ids(
+    vllm_model: tuple[Any, Any, dict[str, torch.Tensor]],
+) -> None:
+    from vllm.config import set_current_vllm_config
+
+    config, model, _ = vllm_model
+    with set_current_vllm_config(config), pytest.raises(RuntimeError, match="got no mode_ids"):
+        model(torch.zeros(3, dtype=torch.long), torch.arange(3))
+
+
+def test_mode_tracking_rejects_out_of_range_modes(
+    vllm_model: tuple[Any, Any, dict[str, torch.Tensor]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vllm.v1.worker.gpu.input_batch import InputBatch, InputBuffers
+
+    from serving.vllm_plugin.state import ModeModelState
+
+    config, model, _ = vllm_model
+    state = ModeModelState(config, model, None, torch.device("cpu"))
+    batch = InputBatch.make_dummy(2, 5, InputBuffers(MAX_SEQS, BUDGET, torch.device("cpu")))
+    monkeypatch.setattr(state.slots, "batch_modes", lambda *a: np.array([0, 1, 2, 3, 0]))
+    with pytest.raises(RuntimeError, match="outside 0..2"):
+        state.prepare_inputs(batch, None)
+
+
+def test_runner_report_checks_stacked_weights(
+    vllm_model: tuple[Any, Any, dict[str, torch.Tensor]],
+) -> None:
+    from types import SimpleNamespace
+
+    from serving.vllm_plugin.model import VllmModeMLP
+    from serving.vllm_plugin.state import ModeModelState, runner_report
+
+    config, model, _ = vllm_model
+    state = ModeModelState(config, model, None, torch.device("cpu"))
+    worker = SimpleNamespace(
+        model_runner=SimpleNamespace(vllm_config=config, model=model, model_state=state)
+    )
+    report = runner_report(worker)
+    assert report["model_state"] == "ModeModelState"
+    assert report["mode_mlps"] == 2
+    assert report["stacking_problems"] == []
+    mlp = next(m for m in model.modules() if isinstance(m, VllmModeMLP))
+    weight = mlp.modes[1].get_parameter("down_proj.weight")
+    saved = weight.data
+    weight.data = torch.ones_like(mlp.stacked().down[1])
+    try:
+        assert "no longer shares memory" in runner_report(worker)["stacking_problems"][0]
+    finally:
+        weight.data = saved
+
+
 @pytest.mark.parametrize("impl", IMPLS)
 def test_hand_driven_engine_matches_hf_greedy(
     vllm_model: tuple[Any, Any, dict[str, torch.Tensor]],

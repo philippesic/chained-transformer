@@ -39,6 +39,7 @@ class ModeModelState(DefaultModelState):
     ) -> None:
         super().__init__(vllm_config, model, encoder_cache, device)
         settings = tracking_settings(vllm_config.model_config.hf_config)
+        self.num_modes = settings.num_modes
         self.slots = SlotModes(token_texts(vllm_config), settings.prompt_mode, settings.record)
         self.mode_ids = torch.zeros(self.max_num_tokens, dtype=torch.int64, device=device)
         self.host_mode_ids = torch.zeros(self.max_num_tokens, dtype=torch.int64)
@@ -66,6 +67,15 @@ class ModeModelState(DefaultModelState):
             np.asarray(input_batch.query_start_loc_np[: num_reqs + 1]),
             token_ids,
         )
+        if modes.shape != (num_tokens,):
+            raise RuntimeError(
+                f"mode tracking produced {modes.shape[0]} modes for {num_tokens} tokens"
+            )
+        if num_tokens and (modes.min() < 0 or modes.max() >= self.num_modes):
+            raise RuntimeError(
+                f"mode tracking produced modes outside 0..{self.num_modes - 1}: "
+                f"{sorted(set(modes.tolist()))}"
+            )
         host = self.host_mode_ids[:padded]
         host.zero_()
         host[:num_tokens] = torch.from_numpy(modes)
@@ -111,4 +121,28 @@ def collect_traces(worker: Any) -> dict[str, Any]:
         "steps": state.steps,
         "mixed_steps": state.mixed_steps,
         "rebuilds": sum(s.rebuilds for s in state.slots.slots.values()),
+    }
+
+
+def runner_report(worker: Any) -> dict[str, Any]:
+    import vllm
+
+    from serving.vllm_plugin.model import VllmModeMLP
+
+    runner = _runner(worker)
+    config = runner.vllm_config
+    mlps = [m for m in runner.model.modules() if isinstance(m, VllmModeMLP)]
+    problems = [f"layer {i}: {p}" for i, m in enumerate(mlps) for p in m.stacking_problems()]
+    first = mlps[0].stacked().gate_up if mlps and not problems else None
+    return {
+        "vllm": vllm.__version__,
+        "model_state": type(runner.model_state).__name__,
+        "mode_mlps": len(mlps),
+        "impls": sorted({m.impl for m in mlps}),
+        "stacking_problems": problems,
+        "weights_device": str(first.device) if first is not None else None,
+        "weights_dtype": str(first.dtype) if first is not None else None,
+        "compilation_mode": str(config.compilation_config.mode),
+        "cudagraph_mode": str(config.compilation_config.cudagraph_mode),
+        "enforce_eager": config.model_config.enforce_eager,
     }
