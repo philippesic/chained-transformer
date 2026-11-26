@@ -112,13 +112,20 @@ per mode, which stack into MoE's `w13 [M, 2I, H]` and `w2 [M, H, I]` layout.
 
 - `config.json` keeps `model_type: qwen3`, sets `architectures: ["ChainedQwen3ForCausalLM"]` and
   keeps the `mode_surgery` block that `apply_surgery` already writes, plus a `mode_tracking`
-  block (`prompt_mode`, optional `token_texts_file`).
+  block (`prompt_mode`, optional `token_texts_file`, `mlp_impl`, and `record` to keep per-request
+  mode traces for tests).
 - Each decoder layer's MLP becomes a module with `modes = ModuleList[Qwen3MLP]`, so the surgery
   checkpoint loads as is. Its forward takes `(x, mode_ids)` and dispatches to one implementation:
+  - `select`: every mode's MLP on every token, picked per row with `torch.where`. Static shapes,
+    so it works under torch.compile and CUDA graphs; costs `M` times the MLP compute. Default.
   - `loop`: per-mode gather, MLP, scatter. Eager only. The reference.
-  - `grouped`: stacked weights, stable sort by mode, per-mode GEMM on contiguous runs, unsort.
-  - `triton`: the grouped kernel below; static grid, no host sync, CUDA-graph safe.
-  - `fused_moe`: vLLM's own `fused_experts` (GPU) or `cpu_fused_moe` (CPU) with top-1 ids.
+  - `triton`: the grouped kernel below, registered as the custom op
+    `chained_transformer::grouped_mode_mlp` so torch.compile treats it as opaque; static grid,
+    no host sync. Mode weights are stacked once after loading and each mode's weights become
+    views into the stack, so nothing is duplicated.
+  - Not built: `grouped` (stable sort by mode, per-mode GEMM on contiguous runs, unsort; the
+    PyTorch version is in `serving/mixed.py`) and `fused_moe` (vLLM's `fused_experts` or
+    `cpu_fused_moe` with top-1 ids).
 - `full` checkpoints serve natively. `lora` checkpoints are merged at export
   (`W_m = W + (alpha/r) B_m A_m`), which loses LoRA's memory advantage and is equal only up to
   rounding; a native LoRA path is shared base GEMMs for all tokens plus a grouped low-rank delta
@@ -130,12 +137,14 @@ per mode, which stack into MoE's `w13 [M, 2I, H]` and `w2 [M, H, I]` layout.
 - One `ModeTracker` per persistent slot, the same class used for training labels, fed token
   strings decoded once per vocabulary id (`TokenTexts`). Using the training tracker is what keeps
   serving routing identical to training routing.
-- Each slot records its owner `req_id` and `fed_len`, the number of tokens already fed. In
-  `prepare_inputs`, for every row whose `req_id` owns its slot: if `fed_len` differs from the
-  row's first scheduled position (spec-decode rejection, resume with cached prefix), rewind
-  from a short ring of snapshots, or rebuild from `req_states.all_token_ids`; then feed the
-  row's scheduled tokens and write their position modes. Rows that do not own their slot
-  (dummy runs) get mode 0 and leave trackers alone.
+- Each slot records its owner `req_id` and `fed`, the number of tokens already fed. In
+  `prepare_inputs`, for every row whose `req_id` owns its slot: if `fed` is past the row's
+  first scheduled position (spec-decode rejection), rebuild the tracker and re-feed the tokens
+  the slot already knows (its prefill tokens and every token fed since); if it is behind
+  (prefix-cache hit), feed the known tokens up to that position. Then feed the row's scheduled
+  tokens and write their position modes. Rows that do not own their slot (dummy runs) get
+  mode 0 and leave trackers alone. A ring of tracker snapshots would make rollback cheaper; it
+  is not built.
 - Position mode of token `p` is the tracker state after reading token `p`, matching the
   Hugging Face hook and the training labels.
 - Chunked prefill feeds chunks in order; resume re-seeds from `prefill_token_ids`.
