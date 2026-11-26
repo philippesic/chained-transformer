@@ -34,18 +34,19 @@ Outputs go to `artifacts/smoke/<timestamp>/` (`smoke.json` plus one log per step
 
 ## Two machines
 
-The 5080 checkout is the main one; the 2080 Ti checkout tracks it (`main` follows `5080/main`).
-Each checkout names the other as a remote over the Tailscale SSH aliases. Git refuses pushes
-into a checked-out branch, so move commits by pulling on the receiving machine:
+Both checkouts track the private GitHub repository `origin`
+(`git@github.com:philippesic/chained-transformer.git`). Commit and push on one machine, then pull
+on the other:
 
 ```sh
-git pull --ff-only            # on the 2080: take the 5080's commits
-git pull --ff-only 2080 main  # on the 5080: take the 2080's commits
+git push
+git pull --ff-only
 ```
 
-Commit work on one machine before pulling on the other. `artifacts/` is not in Git; copy what
-a run needs with `rsync`. The 2080 Ti (11 GB, compute capability 7.5) has no fast bf16, so its
-memory and speed numbers do not stand in for the 5080's.
+Each checkout also names the other as a remote over the Tailscale SSH aliases (`2080` on the
+5080, `5080` on the 2080), for pulling directly when GitHub is unreachable. `artifacts/` is not
+in Git; copy what a run needs with `rsync`. The 2080 Ti has 11 GB and compute capability 7.5,
+so its memory and speed numbers do not stand in for the 5080's.
 
 ## Conventions
 
@@ -54,4 +55,5 @@ memory and speed numbers do not stand in for the 5080's.
 - Product code in `chained_transformer/` never imports `tools/` or `tests/`.
 - Everything large stays in ignored `artifacts/`. Compact evidence that a result needs is
   copied into `results/<name>/`.
-- No hosted remote and no publishing until Philip says otherwise.
+- Push to `origin` at meaningful milestones. Ask before changing its visibility or publishing
+  elsewhere.
