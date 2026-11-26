@@ -108,3 +108,43 @@ def test_moe_router_gets_gradient_and_aux_loss(tiny_model: Qwen3ForCausalLM) -> 
     (loss + 0.01 * aux).backward()
     routers = [m.router.weight.grad for m in tiny_model.modules() if isinstance(m, MoEMLP)]
     assert all(g is not None and g.abs().sum() > 0 for g in routers)
+
+
+class _Scale(torch.nn.Module):
+    def __init__(self, weight: torch.Tensor) -> None:
+        super().__init__()
+        self.weight = torch.nn.Parameter(weight)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x * self.weight
+
+
+def test_moe_identical_experts_return_the_expert_output_in_bf16(
+    tiny_model: Qwen3ForCausalLM,
+) -> None:
+    apply_surgery(tiny_model, SurgeryConfig(variant="moe", moe_experts=3, moe_top_k=2))
+    moe = tiny_model.model.layers[0].mlp
+    assert isinstance(moe, MoEMLP)
+    g = torch.Generator().manual_seed(9)
+    scale = torch.randn(32, generator=g).bfloat16()
+    moe.experts = torch.nn.ModuleList(_Scale(scale.clone()) for _ in range(3))
+    moe.router.to(torch.bfloat16)
+    x = torch.randn(2, 64, 32, generator=g).bfloat16()
+    with torch.no_grad():
+        got = moe(x)
+    assert torch.equal(got, x * scale)
+
+
+def test_moe_identical_experts_match_full_modes_in_bf16(tiny_model: Qwen3ForCausalLM) -> None:
+    tiny_model.to(torch.bfloat16)
+    base = copy.deepcopy(tiny_model)
+    full = copy.deepcopy(tiny_model)
+    routing = apply_surgery(full, SurgeryConfig(variant="full"))
+    apply_surgery(tiny_model, SurgeryConfig(variant="moe", moe_experts=3, moe_top_k=2))
+    ids = _ids(10, (2, 16), 64)
+    routing.set(_ids(11, (2, 16), 3))
+    with torch.no_grad():
+        want = base(input_ids=ids).logits.float()
+        full_diff = (full(input_ids=ids).logits.float() - want).abs().max()
+        moe_diff = (tiny_model(input_ids=ids).logits.float() - want).abs().max()
+    assert moe_diff <= full_diff + 1e-2

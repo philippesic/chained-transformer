@@ -3,9 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import random
 import statistics
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -14,15 +16,20 @@ import torch
 import torch.nn.functional as F
 from datasets import load_from_disk
 from torch import nn
+from torch.optim import Optimizer
 from torch.utils.checkpoint import checkpoint
-from torchao.optim import AdamW8bit
 from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 
+from chained_transformer.attention import ATTENTION_CHOICES, attention_backend, use_attention
 from chained_transformer.model import ARMS, BASE_MODEL, Arm, build, load_base, param_counts
 from chained_transformer.modes import MODE_NAMES, Mode
+from chained_transformer.optim import DEFAULT_CHUNK, ChunkedAdamW8bit
 from chained_transformer.surgery import LoRALinear, SurgeryConfig, freeze_all_but_mode, moe_aux_loss
 
 IGNORE = -100
+OPTIMIZERS = ("chunked", "torchao")
+ALLOC_CONF = "expandable_segments:True"
+PhaseHook = Callable[[str], None]
 
 
 @dataclass
@@ -71,7 +78,9 @@ def token_losses(model: Qwen3ForCausalLM, batch: Batch, chunk: int) -> torch.Ten
     return torch.cat(parts)
 
 
-def configure_trainable(model: nn.Module, arm: Arm, only_mode: int | None) -> None:
+def configure_trainable(
+    model: nn.Module, arm: Arm, only_mode: int | None, freeze_embeddings: bool = False
+) -> None:
     if only_mode is not None:
         freeze_all_but_mode(model, only_mode)
         return
@@ -81,6 +90,46 @@ def configure_trainable(model: nn.Module, arm: Arm, only_mode: int | None) -> No
         for module in model.modules():
             if isinstance(module, LoRALinear):
                 module.base.weight.requires_grad_(False)
+    if freeze_embeddings:
+        embeddings = model.get_input_embeddings()
+        head = model.get_output_embeddings()
+        for module in (embeddings, head):
+            if isinstance(module, nn.Module):
+                for p in module.parameters():
+                    p.requires_grad_(False)
+
+
+def make_optimizer(
+    params: list[nn.Parameter], name: str, lr: float, chunk_numel: int, seed: int
+) -> Optimizer:
+    if name == "torchao":
+        from torchao.optim import AdamW8bit
+
+        optimizer: Optimizer = AdamW8bit(
+            params, lr=lr, weight_decay=0.0, bf16_stochastic_round=True
+        )
+        return optimizer
+    return ChunkedAdamW8bit(
+        params,
+        lr=lr,
+        weight_decay=0.0,
+        bf16_stochastic_round=True,
+        chunk_numel=chunk_numel,
+        seed=seed,
+    )
+
+
+def set_lr(optimizer: Optimizer, lr: float) -> None:
+    for group in optimizer.param_groups:
+        if isinstance(group["lr"], torch.Tensor):
+            group["lr"].fill_(lr)
+        else:
+            group["lr"] = lr
+
+
+def configure_allocator() -> None:
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", ALLOC_CONF)
+    os.environ.setdefault("PYTORCH_ALLOC_CONF", ALLOC_CONF)
 
 
 def lr_at(step: int, steps: int, warmup: int, peak: float) -> float:
@@ -110,7 +159,9 @@ def parse_mode(name: str | None) -> int | None:
     return None if name is None else int(Mode[name.upper()])
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None, on_phase: PhaseHook | None = None) -> None:
+    configure_allocator()
+    phase = on_phase or (lambda name: None)
     parser = argparse.ArgumentParser(description="Train one experiment arm")
     parser.add_argument("--arm", choices=ARMS, required=True)
     parser.add_argument("--data", type=Path, required=True)
@@ -123,7 +174,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--loss-chunk", type=int, default=1024)
+    parser.add_argument("--loss-chunk", type=int, default=256)
     parser.add_argument("--complete-only", action="store_true")
     parser.add_argument("--mode", choices=MODE_NAMES, help="separate arm: the mode it trains")
     parser.add_argument("--only-mode", choices=MODE_NAMES, help="train one mode, freeze the rest")
@@ -131,6 +182,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--moe-top-k", type=int, default=2)
     parser.add_argument("--aux-coef", type=float, default=0.01)
     parser.add_argument("--no-grad-ckpt", action="store_true")
+    parser.add_argument("--optimizer", choices=OPTIMIZERS, default="chunked")
+    parser.add_argument("--optim-chunk", type=int, default=DEFAULT_CHUNK)
+    parser.add_argument("--freeze-embeddings", action="store_true")
+    parser.add_argument("--attention", choices=ATTENTION_CHOICES, default="auto")
     args = parser.parse_args(argv)
     if (args.arm == "separate") != (args.mode is not None):
         parser.error("--mode is required for --arm separate and only valid there")
@@ -148,17 +203,18 @@ def main(argv: list[str] | None = None) -> None:
     random.Random(args.seed).shuffle(order)
 
     model = load_base(args.base, device=device)
+    use_attention(model, args.attention)
     model.config.use_cache = False
     cfg = SurgeryConfig(
         lora_rank=args.lora_rank, lora_alpha=2.0 * args.lora_rank, moe_top_k=args.moe_top_k
     )
     built = build(model, args.arm, cfg)
-    configure_trainable(model, args.arm, parse_mode(args.only_mode))
+    configure_trainable(model, args.arm, parse_mode(args.only_mode), args.freeze_embeddings)
     if not args.no_grad_ckpt:
         model.activation_checkpointing_enable({"use_reentrant": False})
     model.train()
     params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = AdamW8bit(params, lr=args.lr, weight_decay=0.0, bf16_stochastic_round=True)
+    optimizer = make_optimizer(params, args.optimizer, args.lr, args.optim_chunk, args.seed)
     only_label = parse_mode(args.mode)
 
     counts = param_counts(model)
@@ -172,20 +228,22 @@ def main(argv: list[str] | None = None) -> None:
     cursor = 0
     for step in range(args.steps):
         lr = lr_at(step, args.steps, args.warmup, args.lr)
-        for group in optimizer.param_groups:
-            group["lr"].fill_(lr)
+        set_lr(optimizer, lr)
         sync(device)
         start = time.perf_counter()
         sums = torch.zeros(len(MODE_NAMES), device=device)
         counts_by_label = torch.zeros(len(MODE_NAMES), device=device)
         aux_total = 0.0
         tokens = 0
+        truncated = 0
         for _ in range(args.grad_accum):
             row = rows[order[cursor % len(order)]]
             cursor += 1
             batch = make_batch(row, args.seq_len, device, only_label)
+            truncated += len(row["input_ids"]) > args.seq_len + 1
             if built.routing is not None:
                 built.routing.set(batch.mode_ids)
+            phase("forward")
             losses = token_losses(model, batch, args.loss_chunk)
             valid = batch.targets.reshape(-1) != IGNORE
             loss = losses[valid].sum() / valid.sum().clamp(min=1)
@@ -193,14 +251,17 @@ def main(argv: list[str] | None = None) -> None:
             if aux is not None:
                 loss = loss + args.aux_coef * aux
                 aux_total += float(aux.detach())
+            phase("backward")
             (loss / args.grad_accum).backward()
             labels = batch.target_labels.reshape(-1)[valid]
             sums.index_add_(0, labels, losses[valid].detach())
             counts_by_label.index_add_(0, labels, torch.ones_like(labels, dtype=sums.dtype))
             tokens += batch.input_ids.numel()
+        phase("optimizer")
         grad_norm = float(torch.nn.utils.clip_grad_norm_(params, 1.0))
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
+        phase("idle")
         sync(device)
         elapsed = time.perf_counter() - start
         step_times.append(elapsed)
@@ -218,8 +279,10 @@ def main(argv: list[str] | None = None) -> None:
             "grad_norm": round(grad_norm, 4),
             "lr": lr,
             "tokens": tokens,
+            "truncated_rows": truncated,
             "step_s": round(elapsed, 3),
             "peak_alloc_gib": peak_gib(device, reserved=False),
+            "peak_reserved_gib": peak_gib(device, reserved=True),
         }
         log.write(json.dumps(record) + "\n")
         log.flush()
@@ -240,6 +303,8 @@ def main(argv: list[str] | None = None) -> None:
         "median_step_s": round(statistics.median(steady), 3),
         "tokens_per_s": round(sum(tokens_per_step[2:] or tokens_per_step) / sum(steady), 1),
         "device": torch.cuda.get_device_name(device) if on_gpu else "cpu",
+        "optimizer": args.optimizer,
+        "attention": attention_backend(model),
     }
     (args.out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print("training complete", json.dumps(summary))
