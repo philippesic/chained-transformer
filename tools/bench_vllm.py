@@ -160,7 +160,14 @@ def separate(
         int([tr.feed(text(t)) for t in p][-1]) for tr, p in zip(trackers, prompts, strict=True)
     ]
     new = [0] * len(prompts)
-    stats = {"calls": 0, "prefill_tokens": 0, "wasted_tokens": 0, "switches": 0}
+    moved = [False] * len(prompts)
+    stats = {
+        "calls": 0,
+        "prefill_tokens": 0,
+        "switch_prefill_tokens": 0,
+        "wasted_tokens": 0,
+        "switches": 0,
+    }
     t0 = time.perf_counter()
     while any(n < max_tokens for n in new):
         for m, llm in enumerate(llms):
@@ -173,7 +180,11 @@ def separate(
             )
             stats["calls"] += 1
             for i, out in zip(batch, outs, strict=True):
-                stats["prefill_tokens"] += prefill_computed(len(tokens[i]), out)
+                computed = prefill_computed(len(tokens[i]), out)
+                stats["prefill_tokens"] += computed
+                if moved[i]:
+                    stats["switch_prefill_tokens"] += computed
+                    moved[i] = False
                 gen = list(out.outputs[0].token_ids)
                 kept = 0
                 for t in gen:
@@ -182,6 +193,7 @@ def separate(
                     if mode != modes[i]:
                         modes[i] = mode
                         stats["switches"] += 1
+                        moved[i] = True
                         break
                 stats["wasted_tokens"] += len(gen) - kept
                 tokens[i] += gen[:kept]

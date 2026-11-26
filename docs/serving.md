@@ -193,3 +193,5 @@ several decode steps, so un-overlapped paging would be visible on every switch.
 ## Status
 
 See [serving notes](serving-notes.md) for what is verified, where, and what is not.
+[demo-mode-swap.md](demo-mode-swap.md) has the commands for the one-cache demo against
+separate models on the 2080 Ti and the 5080.

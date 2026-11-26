@@ -192,8 +192,9 @@ Found and fixed on `cloud/serving-review`:
 
 Still open, to check on the 2080 Ti:
 
-- fp16 on sm_75. Qwen3 activations may overflow in fp16. Run the base model in fp16 and fp32 and
-  compare them with `python -m tools.compare_outputs` before trusting any chained number.
+- fp16 on sm_75. Qwen3 activations may overflow in fp16. Step 2 of the
+  [mode-swap demo](demo-mode-swap.md) runs the base model in fp16 and fp32 and compares them with
+  `tools.compare_outputs` before any chained number is trusted.
 - One device-to-host copy per step (see Known limits).
 - With async scheduling and `ignore_eos=False`, a request that stops on EOS may get one extra
   forward step, so its trace can hold one more entry than its output.
