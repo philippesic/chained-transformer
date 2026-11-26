@@ -45,7 +45,7 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 
 [tool.mypy]
 python_version = "3.11"
-packages = ["chained_transformer", "tests", "tools"]
+packages = ["chained_transformer", "serving", "tests", "tools"]
 check_untyped_defs = true
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
