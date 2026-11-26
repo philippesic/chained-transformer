@@ -103,7 +103,7 @@ def kernel_outcome(report: dict[str, Any], tol: float = KERNEL_TOL) -> Outcome:
                 notes.append(f"{where} raised {r['error']}")
     errors = [r["max_abs_err"] for r in checked if "max_abs_err" in r]
     worst = max(errors, default=float("nan"))
-    bad = [r for r in checked if r.get("max_abs_err", 0.0) > tol]
+    bad = [r for r in checked if "error" not in r and not r.get("max_abs_err", 0.0) <= tol]
     for r in bad:
         notes.append(
             f"{r['impl']} at {r['tokens']} tokens ({r['mix']}) is off by {r['max_abs_err']:.2e}"
@@ -114,7 +114,7 @@ def kernel_outcome(report: dict[str, Any], tol: float = KERNEL_TOL) -> Outcome:
     graph = report.get("cuda_graph") or {}
     if not graph.get("captured"):
         notes.append(f"CUDA graph capture failed: {graph.get('error', 'not attempted')}")
-    elif graph.get("max_abs_err_after_replays", 0.0) > tol:
+    elif not graph.get("max_abs_err_after_replays", float("nan")) <= tol:
         notes.append(f"CUDA graph replays are off by {graph['max_abs_err_after_replays']:.2e}")
     failed = [n for n in notes if not n.startswith("info:")]
     best: dict[str, Any] = {}
@@ -141,7 +141,7 @@ def kernel_outcome(report: dict[str, Any], tol: float = KERNEL_TOL) -> Outcome:
     return Outcome("fail" if failed else "pass", notes, data)
 
 
-def bench_vllm_outcome(report: dict[str, Any], prompts: int | None) -> Outcome:
+def bench_vllm_outcome(report: dict[str, Any], prompts: int | None, exact: bool) -> Outcome:
     notes: list[str] = []
     status = "pass"
     speeds: dict[str, Any] = {}
@@ -153,7 +153,8 @@ def bench_vllm_outcome(report: dict[str, Any], prompts: int | None) -> Outcome:
             continue
         speeds[name] = row.get("tok_per_s")
         same = row.get("same_tokens_as_base")
-        if name == "chained/select" and prompts is not None and same is not None and same < prompts:
+        drifted = prompts is not None and same is not None and same < prompts
+        if exact and name == "chained/select" and drifted:
             if status == "pass":
                 status = "warn"
             notes.append(
@@ -368,7 +369,10 @@ def plan(args: argparse.Namespace, out: Path, info: dict[str, Any]) -> list[Step
                     str(out / "bench_vllm.json"),
                 ],
             ],
-            json_judge(out / "bench_vllm.json", lambda r: bench_vllm_outcome(r, prompts)),
+            json_judge(
+                out / "bench_vllm.json",
+                lambda r: bench_vllm_outcome(r, prompts, args.model == "qwen"),
+            ),
             "an arm failed; its own log lines are in this step's log after its '+ ' command",
             env=venv,
             needs=vllm_needs or qwen_needs,

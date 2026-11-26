@@ -79,6 +79,8 @@ check, the vLLM engine tests (eager, then compiled with CUDA graphs) in the vLLM
 `report.md` in `artifacts/serving/gpu-checklist/<time>/` gives pass, fail, warn or not run per
 step, with the log tail and what a failure means. A vLLM test that skips on the GPU counts as a
 failure. `--only`, `--skip` and `--model tiny` narrow it; `--dry-run` prints the commands.
+With `--allow-other-clients` on the shared 5080, a vLLM engine can fail to start if the other
+workload's memory use changes while vLLM profiles memory.
 
 Changes made for that run, all checked on CPU:
 
@@ -93,6 +95,11 @@ Changes made for that run, all checked on CPU:
 - `serving.vllm_plugin.state.runner_report` (for `collective_rpc`) reports the model state
   class, MLP impls, compile and CUDA graph modes, and whether the stacked weights still share
   memory with each mode's weights after vLLM's processing.
+- vLLM gives each request an internal id (the caller's id plus `-` and 8 hex digits), so
+  `collect_traces` keys traces by the caller's id; the engine tests looked them up by the
+  caller's id and would have failed with KeyError.
+- The engine tests set `TRITON_F32_DEFAULT=ieee`: float32 attention runs on vLLM's Triton
+  backend, whose dots default to TF32 on the 5080, which can flip exact greedy matches.
 - The vLLM engine tests cap `gpu_memory_utilization` at 0.2 instead of vLLM's 0.9, run the
   Triton impl on CUDA, and `tests/test_serving_vllm_graphs.py` adds a compiled, CUDA-graph
   engine with the Triton impl checked against Hugging Face at three batch sizes.
@@ -127,7 +134,8 @@ Changes made for that run, all checked on CPU:
 - `select` runs every mode's MLP on every token, so it costs `M` times the MLP compute; it is
   the safe default, not the fast path.
 - The tracker needs each step's input tokens on the host: one device-to-host copy per step (see
-  the design's device-side tracker).
+  the design's device-side tracker). The copy waits for the GPU, which cancels vLLM's async
+  scheduling overlap, so the chained arms' tokens per second understate the plugin.
 - On CPU, vLLM repacks linear weights after loading, so the stacked copy the Triton path keeps
   is extra memory there. Triton is a GPU path, so this only matters for tests.
 - The `grouped` and `fused_moe` implementations in the design were not built into the plugin;

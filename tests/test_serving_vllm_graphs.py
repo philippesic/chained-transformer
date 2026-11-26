@@ -32,6 +32,7 @@ def llm(
     if not current_platform.is_cuda():
         pytest.skip("CUDA graphs need a CUDA GPU")
     os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
+    os.environ.setdefault("TRITON_F32_DEFAULT", "ieee")
     from serving.vllm_plugin import register
 
     register()

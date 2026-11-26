@@ -513,7 +513,12 @@ def test_runner_report_checks_stacked_weights(
     from vllm.config import CompilationMode
 
     from serving.vllm_plugin.model import VllmModeMLP
-    from serving.vllm_plugin.state import ModeModelState, runner_report
+    from serving.vllm_plugin.state import (
+        ModeModelState,
+        collect_traces,
+        external_id,
+        runner_report,
+    )
 
     config, model, _ = vllm_model
     state = ModeModelState(config, model, None, torch.device("cpu"))
@@ -526,6 +531,9 @@ def test_runner_report_checks_stacked_weights(
     assert report["stacking_problems"] == []
     assert report["compilation_mode"] in {m.name for m in CompilationMode}
     assert report["cudagraph_mode"] == "NONE"
+    assert collect_traces(worker)["traces"] == {}
+    assert external_id("3-0a1b2c3d") == "3"
+    assert external_id("my-request") == "my-request"
     mlp = next(m for m in model.modules() if isinstance(m, VllmModeMLP))
     weight = mlp.modes[1].get_parameter("down_proj.weight")
     saved = weight.data

@@ -30,6 +30,7 @@ def llm(
     tiny: tuple[Qwen3ForCausalLM, Routing], tmp_path_factory: pytest.TempPathFactory
 ) -> Iterator[Any]:
     os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
+    os.environ.setdefault("TRITON_F32_DEFAULT", "ieee")
     os.environ.setdefault("VLLM_CPU_KVCACHE_SPACE", "1")
     from vllm.platforms import current_platform
     from vllm.triton_utils import HAS_TRITON

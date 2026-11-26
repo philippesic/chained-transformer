@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import numpy as np
@@ -11,6 +12,12 @@ from vllm.v1.worker.gpu.model_states.default import DefaultModelState
 from chained_transformer.generate import TokenTexts
 from serving.export import load_token_texts, tracking_settings
 from serving.mode_slots import SlotModes
+
+ENGINE_SUFFIX = re.compile(r"-[0-9a-f]{8}$")
+
+
+def external_id(req_id: str) -> str:
+    return ENGINE_SUFFIX.sub("", req_id)
 
 
 def token_texts(vllm_config: VllmConfig) -> list[str]:
@@ -116,8 +123,8 @@ def set_mlp_impl(worker: Any, impl: str) -> int:
 def collect_traces(worker: Any) -> dict[str, Any]:
     state = _runner(worker).model_state
     return {
-        "traces": state.slots.traces(),
-        "first_starts": dict(state.slots.first_starts),
+        "traces": {external_id(k): v for k, v in state.slots.traces().items()},
+        "first_starts": {external_id(k): v for k, v in state.slots.first_starts.items()},
         "steps": state.steps,
         "mixed_steps": state.mixed_steps,
         "rebuilds": sum(s.rebuilds for s in state.slots.slots.values()),

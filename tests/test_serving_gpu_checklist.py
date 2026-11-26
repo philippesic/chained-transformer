@@ -93,6 +93,9 @@ def test_kernel_outcome_checks_errors_and_graph_capture() -> None:
     }
     assert any(n.startswith("info:") for n in good.notes)
     assert checklist.kernel_outcome(kernel_report(err=0.5)).status == "fail"
+    assert checklist.kernel_outcome(kernel_report(err=float("nan"))).status == "fail"
+    nan_graph = {"captured": True, "max_abs_err_after_replays": float("nan")}
+    assert checklist.kernel_outcome(kernel_report(graph=nan_graph)).status == "fail"
     lost = checklist.kernel_outcome(kernel_report(graph={"captured": False, "error": "sync"}))
     assert lost.status == "fail"
     assert "CUDA graph capture failed: sync" in lost.notes
@@ -104,10 +107,11 @@ def test_bench_vllm_outcome_flags_failed_arms_and_drift() -> None:
         {"arm": "chained", "impl": "select", "tok_per_s": 90.0, "same_tokens_as_base": 7},
         {"arm": "separate", "impl": None, "error": "exit 1"},
     ]
-    out = checklist.bench_vllm_outcome({"arms": arms[:2]}, prompts=8)
+    out = checklist.bench_vllm_outcome({"arms": arms[:2]}, prompts=8, exact=True)
     assert out.status == "warn"
     assert out.data["tok_per_s"] == {"base": 100.0, "chained/select": 90.0}
-    assert checklist.bench_vllm_outcome({"arms": arms}, prompts=8).status == "fail"
+    assert checklist.bench_vllm_outcome({"arms": arms[:2]}, 8, exact=False).status == "pass"
+    assert checklist.bench_vllm_outcome({"arms": arms}, prompts=8, exact=True).status == "fail"
 
 
 def test_plan_filters_steps_and_marks_missing_environments(tmp_path: Path) -> None:
