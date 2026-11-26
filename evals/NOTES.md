@@ -145,6 +145,7 @@ uv run --locked --no-sync python -m evals.run --model <checkpoint or Hub name> \
   give the rule the sample was sized for, both seed-mean margins clearing a one-sided 5% test:
   about 69% at a true 2-point gap with two seeds and 86% with three. Training noise between
   seeds raises that rule's false continues, since its line counts only sampling error.
+  `pilot plan --kill-rule seed-mean` applies it; `every-seed`, the rule as written, is the default.
 - The pilot defaults to the verdict eval set: `sft`, `full`, `lora` and `moe` on a per-benchmark
   sample sized by `tools/eval_power.py` for a 2-point gap at two seeds, assuming the arms
   disagree on 10% of problems (361 MATH500, all 164 HumanEval+, 361 LiveCodeBench). After each
