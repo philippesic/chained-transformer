@@ -587,7 +587,7 @@ def test_mode_state_refuses_speculative_decoding(
 
 
 def test_set_mlp_impl_refuses_a_compiled_engine(
-    vllm_model: tuple[Any, Any, dict[str, torch.Tensor]],
+    vllm_model: tuple[Any, Any, dict[str, torch.Tensor]], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from types import SimpleNamespace
 
@@ -607,7 +607,27 @@ def test_set_mlp_impl_refuses_a_compiled_engine(
         )
         with pytest.raises(RuntimeError, match="change nothing"):
             set_mlp_impl(compiled, "triton")
-    assert {m.impl for m in model.modules() if hasattr(m, "stack_weights")} == {"select"}
+    with pytest.raises(ValueError, match="must be one of"):
+        set_mlp_impl(eager, "grouped")
+    mlps = [m for m in model.modules() if hasattr(m, "stack_weights")]
+    for mlp in mlps:
+        monkeypatch.setattr(mlp, "tensor_parallel", 2)
+    with pytest.raises(ValueError, match="tensor-parallel"):
+        set_mlp_impl(eager, "triton")
+    assert set_mlp_impl(eager, "loop") == 2
+    assert set_mlp_impl(eager, "select") == 2
+    assert {m.impl for m in mlps} == {"select"}
+
+
+def test_impl_problem_names_what_each_impl_cannot_serve() -> None:
+    from serving.vllm_plugin.model import impl_problem
+
+    assert impl_problem("select", quantized=True, tensor_parallel=4) is None
+    assert impl_problem("loop", quantized=False, tensor_parallel=2) is None
+    assert impl_problem("triton", quantized=False, tensor_parallel=1) is None
+    assert "must be one of" in (impl_problem("grouped", False, 1) or "")
+    assert "unquantized" in (impl_problem("triton", True, 1) or "")
+    assert "tensor-parallel" in (impl_problem("triton", False, 2) or "")
 
 
 @pytest.mark.parametrize("impl", IMPLS)

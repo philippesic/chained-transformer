@@ -189,6 +189,12 @@ Found and fixed on `cloud/serving-review`:
 - `set_mlp_impl` on an engine that was compiled or captured graphs changed a flag and nothing
   else, so a benchmark would have timed the old implementation under the new name. It now raises
   unless the engine runs with `enforce_eager=True`.
+- `set_mlp_impl` took any name, and an unknown one ran the Triton path. It now accepts only
+  `select`, `loop` and `triton`.
+- `triton` skipped the all-reduce that vLLM's row-parallel down projection does, so with tensor
+  parallelism every rank would have returned a partial sum. `triton` now refuses tensor
+  parallelism (and, as before, quantized weights), at engine start and in `set_mlp_impl`;
+  `select` and `loop` go through vLLM's own layers and are untested with it.
 
 Still open, to check on the 2080 Ti:
 

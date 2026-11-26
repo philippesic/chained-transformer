@@ -140,7 +140,7 @@ def _runner(worker: Any) -> Any:
 
 
 def set_mlp_impl(worker: Any, impl: str) -> int:
-    from serving.vllm_plugin.model import VllmModeMLP
+    from serving.vllm_plugin.model import VllmModeMLP, impl_problem
 
     runner = _runner(worker)
     compilation = runner.vllm_config.compilation_config
@@ -151,6 +151,10 @@ def set_mlp_impl(worker: Any, impl: str) -> int:
             "hf_overrides={'mode_tracking': {'mlp_impl': ...}} or use enforce_eager=True"
         )
     mlps = [m for m in runner.model.modules() if isinstance(m, VllmModeMLP)]
+    for mlp in mlps:
+        problem = impl_problem(impl, mlp.quantized, mlp.tensor_parallel)
+        if problem is not None:
+            raise ValueError(problem)
     for mlp in mlps:
         mlp.impl = impl
     return len(mlps)
