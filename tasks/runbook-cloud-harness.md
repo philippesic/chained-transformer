@@ -5,25 +5,18 @@ first step that does not pass; keep its printed output and the JSON file it name
 this branch has run on torch yet (see [overnight-cloud-2026-11-26](overnight-cloud-2026-11-26.md)),
 so step 1 is the first time most of it executes.
 
-The 2080 Ti goes first (steps 1 to 6). On the 5080, the data build and probes (steps 7 and 8)
-need no GPU and can run at the same time; its GPU steps (9 and 10) wait until BitDraft is done.
+The 2080 Ti (Turing, 11 GB, sm_75) goes first (steps 1 to 6). Its GPU commands queue in this
+project's pueue group `ct` (parallelism 1), as written below; pueue's `gpu` group there belongs
+to ShaderLOD and is never used. Read a queued step's output with `pueue follow` or `pueue log`.
+On the 5080, the data build and probes (steps 7 and 8) need no GPU and can run at the same time;
+its GPU steps (9 and 10) are 5080 only, once BitDraft is done and Philip says so.
 
-## Sharing the GPUs
-
-The 2080 Ti also runs ShaderLOD's jobs, in pueue's `gpu` group. This project's group there is
-`ct`, one job at a time, so the 2080 Ti's long steps (2 to 6) are written as `pueue add -g ct`
-commands. Queue them one at a time or all at once; read them in order with
-`pueue status -g ct` and `pueue log --full <id>`. "Exit 0" below means the task shows `Success`,
-and the printed lines are in its log. To run a step in the terminal instead, drop its
-`pueue add -g ct --label <name> --` prefix (and, in step 5, the outer quotes). If `pueue add`
-says the group doesn't exist, create it with `pueue group add ct && pueue parallel 1 -g ct`.
-
-Steps 1 and 1b take a minute or two; run them directly once `pueue status` shows no job running
-in `gpu`. The memory check and the GPU smoke refuse to measure while another process holds the
-GPU (exit 2); requeue the step when ShaderLOD's job ends, and never stop that job.
-
-[AGENTS.md](../AGENTS.md) asks for jobwatch on jobs longer than a few minutes. I don't know its
-command, so wrap these the way you usually do.
+A queued step's "exit 0" below means pueue shows it as `Success`; `pueue status -g ct` lists the
+ids. The memory check and the GPU smoke refuse to measure while another process holds the GPU
+(exit 2, `GPU busy`); requeue the step when that job ends, and never stop it. If `pueue add` says
+`ct` doesn't exist, create it with `pueue group add ct && pueue parallel 1 -g ct`.
+[AGENTS.md](../AGENTS.md) asks for jobwatch on jobs longer than a few minutes; its command isn't
+known here, so wrap these the way you usually do.
 
 ## Expected memory
 
@@ -65,7 +58,7 @@ git switch cloud/harness
 ## 1. 2080 Ti: check
 
 ```sh
-uv run --locked --no-sync python -m tools.check
+pueue add -g ct -- uv run --locked --no-sync python -m tools.check
 ```
 
 Pass: exit 0 with no `failed:` lines.
@@ -75,7 +68,7 @@ only real torch stubs show will surface now. A `types` failure alone doesn't blo
 steps; see the tests on their own with:
 
 ```sh
-uv run --locked --no-sync pytest -q -p no:cacheprovider
+pueue add -g ct -- uv run --locked --no-sync pytest -q -p no:cacheprovider
 ```
 
 A failing test in `test_optim.py`, `test_attention.py` or the MoE tests in `test_surgery.py`
@@ -84,7 +77,7 @@ does block them, because those are the pieces the GPU steps rely on. Keep the ou
 ## 1b. 2080 Ti: GPU unit tests
 
 ```sh
-uv run --locked --no-sync pytest -m gpu -q -p no:cacheprovider
+pueue add -g ct -- uv run --locked --no-sync pytest -m gpu -q -p no:cacheprovider
 ```
 
 These run on tiny random models, so they need no download. On CUDA they check fused attention
@@ -102,7 +95,7 @@ A failing MoE memory test means the `moe` rows of steps 2, 3 and 6 will read hig
 ## 2. 2080 Ti: memory at 4k and 8k (must fit)
 
 ```sh
-pueue add -g ct --label 2-memory-4k-8k -- uv run --locked --no-sync python -m tools.memory_check --device cuda --base Qwen/Qwen3-0.6B --seq-len 4096 8192 --budget-gib 10.5 --out artifacts/memory-check/2080-fixed.json
+pueue add -g ct -- uv run --locked --no-sync python -m tools.memory_check --device cuda --base Qwen/Qwen3-0.6B --seq-len 4096 8192 --budget-gib 10.5 --out artifacts/memory-check/2080-fixed.json
 ```
 
 Pass: exit 0 and ten lines (five arms, two lengths), each ending in `fits`, none with
@@ -111,8 +104,7 @@ estimated); they calibrate `chained_transformer.memory`.
 
 If it fails:
 
-- Exit 2 and `GPU busy`: another process holds the GPU, most likely a ShaderLOD job; requeue
-  when it ends.
+- Exit 2 and `GPU busy`: another process holds the GPU; wait for it.
 - `OUT OF MEMORY in optimizer`: the chunked optimizer is not the one running, or its chunk is
   too big. Check the arm's `setup` in the JSON says `"optimizer": "chunked"`.
 - `OUT OF MEMORY in forward` or `backward`, or `attention fell back to math`: attention is
@@ -124,21 +116,21 @@ If it fails:
 ## 3. 2080 Ti: memory at 16k (informative)
 
 ```sh
-pueue add -g ct --label 3-memory-16k -- uv run --locked --no-sync python -m tools.memory_check --device cuda --base Qwen/Qwen3-0.6B --seq-len 16384 --budget-gib 10.5 --out artifacts/memory-check/2080-fixed-16k.json
+pueue add -g ct -- uv run --locked --no-sync python -m tools.memory_check --device cuda --base Qwen/Qwen3-0.6B --seq-len 16384 --budget-gib 10.5 --out artifacts/memory-check/2080-fixed-16k.json
 ```
 
 Expected: `sft`, `lora` and `separate` fit; `full` and `moe` are likely `OVER` or out of
-memory, so exit 1 here is expected and is why those two train on the 5080. To see whether frozen
-embeddings bring them in:
+memory, so exit 1 here is expected and is why those two train on the 5080 (5080 only, once
+BitDraft is done and Philip says so). To see whether frozen embeddings bring them in:
 
 ```sh
-pueue add -g ct --label 3-memory-16k-frozen -- uv run --locked --no-sync python -m tools.memory_check --device cuda --base Qwen/Qwen3-0.6B --arms full moe --seq-len 16384 --freeze-embeddings --budget-gib 10.5 --out artifacts/memory-check/2080-fixed-16k-frozen.json
+pueue add -g ct -- uv run --locked --no-sync python -m tools.memory_check --device cuda --base Qwen/Qwen3-0.6B --arms full moe --seq-len 16384 --freeze-embeddings --budget-gib 10.5 --out artifacts/memory-check/2080-fixed-16k-frozen.json
 ```
 
 ## 4. 2080 Ti: the old harness, for the before and after (optional)
 
 ```sh
-pueue add -g ct --label 4-old-harness -- uv run --locked --no-sync python -m tools.memory_check --device cuda --base Qwen/Qwen3-0.6B --harness current-turing --seq-len 4096 --budget-gib 10.5 --out artifacts/memory-check/2080-current.json
+pueue add -g ct -- uv run --locked --no-sync python -m tools.memory_check --device cuda --base Qwen/Qwen3-0.6B --harness current-turing --seq-len 4096 --budget-gib 10.5 --out artifacts/memory-check/2080-current.json
 ```
 
 Expected: every arm `OUT OF MEMORY`, most in `optimizer`, as in last night's smoke, and exit 1.
@@ -149,10 +141,9 @@ If the old harness fits now, last night's failure had a cause the overnight writ
 Twenty steps of each arm on the existing slice:
 
 ```sh
-pueue add -g ct --label 5-smoke-4k -- 'for arm in sft full lora moe; do uv run --locked --no-sync python -m chained_transformer.train --arm $arm --data artifacts/data/ot3-slice-4k --out artifacts/runs/2080-4k-$arm --steps 20 --seq-len 4096 --complete-only --device cuda || exit 1; done; uv run --locked --no-sync python -m chained_transformer.train --arm separate --mode answer --data artifacts/data/ot3-slice-4k --out artifacts/runs/2080-4k-separate --steps 20 --seq-len 4096 --complete-only --device cuda'
+pueue add -g ct -- 'for arm in sft full lora moe; do uv run --locked --no-sync python -m chained_transformer.train --arm $arm --data artifacts/data/ot3-slice-4k --out artifacts/runs/2080-4k-$arm --steps 20 --seq-len 4096 --complete-only --device cuda || exit 1; done'
+pueue add -g ct -- uv run --locked --no-sync python -m chained_transformer.train --arm separate --mode answer --data artifacts/data/ot3-slice-4k --out artifacts/runs/2080-4k-separate --steps 20 --seq-len 4096 --complete-only --device cuda
 ```
-
-The task stops at the first arm that fails.
 
 Pass: each run ends with `training complete`, every `step=` line shows a finite loss, and each
 `artifacts/runs/2080-4k-<arm>/summary.json` has `attention_math_fallbacks: 0` and a
@@ -166,7 +157,7 @@ points at that arm's surgery; on every arm, at the optimizer.
 ## 6. 2080 Ti: MoE in bf16
 
 ```sh
-pueue add -g ct --label 6-moe-bf16 -- uv run --locked --no-sync python -m tools.gpu_equivalence --variants full moe --out artifacts/equivalence/2080-moe-bf16.json
+pueue add -g ct -- uv run --locked --no-sync python -m tools.gpu_equivalence --variants full moe --out artifacts/equivalence/2080-moe-bf16.json
 ```
 
 Each printed line is: variant, dtype, identical tokens, first divergence, max logit difference,
@@ -179,8 +170,8 @@ If it fails: if `full` diverges too, the drift is in generation, not in the MoE 
 
 ## 7. 5080, no GPU needed: data build
 
-Steps 7 and 8 run for a while on the CPU. Wrap them the way you usually do on the 5080, but not
-in its pueue `gpu` group, which would hold them behind BitDraft.
+Steps 7 and 8 run for a while on the CPU. Keep them out of the 5080's pueue `gpu` group, which
+would hold them behind BitDraft.
 
 ```sh
 uv run --locked --no-sync python -m chained_transformer.data --policy equal-domains-16k
@@ -211,19 +202,17 @@ rsync -a artifacts/data/ot3-mix-8k 2080:<repo>/artifacts/data/
 OMP_NUM_THREADS=8 uv run --locked --no-sync python -m tools.mode_probe --data artifacts/data/ot3-mix
 ```
 
-Add `--device cuda` instead when a GPU is free. Pass: exit 0 and
+Add `--device cuda` instead when a GPU is free; on the 5080 that is 5080 only, once BitDraft is
+done and Philip says so. Pass: exit 0 and
 `artifacts/probes/mode-probe.json` with, for `position_mode` and `segment_label`, a balanced
 accuracy per layer (layer 0 is the embedding) and a `majority_baseline`. The first layer well
 above the baseline is where the modes are already linearly separable, which is where the design
 note's option 3 (mode-specific ends, shared looped middle) would start specialising.
 
-## 9. 5080, when the GPU is free: memory at 16k for `full` and `moe`
+## 9. 5080 only, once BitDraft is done and Philip says so: memory at 16k for `full` and `moe`
 
-Only once the 5080 is free for this project's GPU work. Check `nvidia-smi` and `pueue status`
-first and never stop another project's job; [development](../docs/development.md) says to queue
-behind BitDraft in the 5080's `gpu` group, so put `pueue add -g gpu --label 9-memory-16k --` in
-front of the command below, and likewise for step 10. The check refuses to start while another
-process holds the GPU.
+Check `nvidia-smi` and `pueue status` first; never stop another project's job. The check
+refuses to start while another process holds the GPU.
 
 ```sh
 uv run --locked --no-sync python -m tools.memory_check --device cuda --base Qwen/Qwen3-0.6B --arms full moe --seq-len 16384 --budget-gib 15 --out artifacts/memory-check/5080-16k.json
@@ -232,7 +221,7 @@ uv run --locked --no-sync python -m tools.memory_check --device cuda --base Qwen
 Pass: exit 0, both lines end in `fits` (estimates 10.0 and 10.8 GiB). If either is `OVER`,
 rerun with `--freeze-embeddings`; if that fits, 16k training on this card needs that flag.
 
-## 10. 5080, when the GPU is free: GPU smoke
+## 10. 5080 only, once BitDraft is done and Philip says so: GPU smoke
 
 ```sh
 uv run --locked --no-sync pytest -m gpu -q -p no:cacheprovider
