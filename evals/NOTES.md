@@ -85,6 +85,17 @@ uv run --locked --no-sync python -m evals.run --model <checkpoint or Hub name> \
   the dataset's loader script on the Hub, which could not be read. The report records the
   README's count for the release next to the count loaded; v5 should give 880.
 
+- The pilot (`tools/pilot.py`) evaluates every arm greedily, because the `separate` arm's
+  re-prefill loop only decodes greedily; Qwen3's recommended sampling (0.6/0.95/20) is for later
+  runs. Its defaults (1,000 steps, 4,096 tokens, 8 rows per step, learning rate 1e-5 and 1e-4
+  for `lora`, complete rows only) are placeholders until decisions 1 and 2 in the task are
+  settled; a plan's config is fixed once written.
+- The pilot trains through `train.main`'s `on_model` hook, which exists only on `cloud/harness`.
+  On a tree with both branches merged, a 7-run tiny pilot on CPU trained, saved, evaluated and
+  compared end to end.
+- `evals/switch_stats.py` reads `mode_runs`, which responses record from this branch on; older
+  `responses.jsonl` files count as responses without a trace.
+
 ## Deliberate differences from the official harnesses
 
 - LiveCodeBench: `for line in sys.stdin` works. The official mock stdin (since 2025-05-23) has no

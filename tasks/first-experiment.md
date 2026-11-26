@@ -75,6 +75,11 @@ Open decisions (proposals, not yet agreed):
 Missing before real runs: checkpoint save and load, row packing or a length policy, and an eval
 CLI that loads trained arms (the current CLI runs the base model only).
 
+Branch `cloud/evals` (2026-11-26 overnight, CPU only, Hugging Face blocked) adds mode
+checkpoints with save and load, an eval CLI for trained arms (MATH500, HumanEval+,
+LiveCodeBench, leakage), a single-mode upgrade harness and a pilot launcher for the five arms;
+see `evals/NOTES.md`. Its first GPU step is `python -m tools.real_model_smoke`.
+
 ## Next
 
 Philip decided on 2026-11-26 not to queue the GPU smoke behind BitDraft and will say when the
