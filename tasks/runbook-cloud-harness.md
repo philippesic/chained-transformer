@@ -11,6 +11,13 @@ to ShaderLOD and is never used. Read a queued step's output with `pueue follow` 
 On the 5080, the data build and probes (steps 7 and 8) need no GPU and can run at the same time;
 its GPU steps (9 and 10) are 5080 only, once BitDraft is done and Philip says so.
 
+A queued step's "exit 0" below means pueue shows it as `Success`; `pueue status -g ct` lists the
+ids. The memory check and the GPU smoke refuse to measure while another process holds the GPU
+(exit 2, `GPU busy`); requeue the step when that job ends, and never stop it. If `pueue add` says
+`ct` doesn't exist, create it with `pueue group add ct && pueue parallel 1 -g ct`.
+[AGENTS.md](../AGENTS.md) asks for jobwatch on jobs longer than a few minutes; its command isn't
+known here, so wrap these the way you usually do.
+
 ## Expected memory
 
 Peak allocated GiB from `chained_transformer.memory`, without the CUDA context. The
@@ -134,7 +141,7 @@ If the old harness fits now, last night's failure had a cause the overnight writ
 Twenty steps of each arm on the existing slice:
 
 ```sh
-pueue add -g ct -- 'for arm in sft full lora moe; do uv run --locked --no-sync python -m chained_transformer.train --arm $arm --data artifacts/data/ot3-slice-4k --out artifacts/runs/2080-4k-$arm --steps 20 --seq-len 4096 --complete-only --device cuda || break; done'
+pueue add -g ct -- 'for arm in sft full lora moe; do uv run --locked --no-sync python -m chained_transformer.train --arm $arm --data artifacts/data/ot3-slice-4k --out artifacts/runs/2080-4k-$arm --steps 20 --seq-len 4096 --complete-only --device cuda || exit 1; done'
 pueue add -g ct -- uv run --locked --no-sync python -m chained_transformer.train --arm separate --mode answer --data artifacts/data/ot3-slice-4k --out artifacts/runs/2080-4k-separate --steps 20 --seq-len 4096 --complete-only --device cuda
 ```
 
@@ -162,6 +169,9 @@ If it fails: if `full` diverges too, the drift is in generation, not in the MoE 
 `moe` does, note how large the logit difference is now against 0.4 to 0.66 before.
 
 ## 7. 5080, no GPU needed: data build
+
+Steps 7 and 8 run for a while on the CPU. Keep them out of the 5080's pueue `gpu` group, which
+would hold them behind BitDraft.
 
 ```sh
 uv run --locked --no-sync python -m chained_transformer.data --policy equal-domains-16k

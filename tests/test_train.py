@@ -98,3 +98,16 @@ def test_each_arm_trains_on_cpu(tiny_model: Qwen3ForCausalLM, tmp_path: Path, ar
     if arm == "separate":
         assert set(records[0]["loss_by_label"]) == {"code"}
     assert json.loads((out / "summary.json").read_text())["arm"] == arm
+
+
+def test_complete_only_keeps_complete_rows(tiny_model: Qwen3ForCausalLM, tmp_path: Path) -> None:
+    base = tmp_path / "base"
+    tiny_model.save_pretrained(base)
+    rows = [{**ROW, "complete": complete} for complete in (True, False, False)]
+    Dataset.from_list(rows).save_to_disk(str(tmp_path / "data"))
+    out = tmp_path / "run"
+    argv = ["--arm", "sft", "--data", str(tmp_path / "data"), "--out", str(out), "--steps", "1"]
+    argv += ["--seq-len", "8", "--device", "cpu", "--base", str(base)]
+    for extra, kept in (([], 3), (["--complete-only"], 1)):
+        main([*argv, *extra])
+        assert json.loads((out / "config.json").read_text())["rows"] == kept

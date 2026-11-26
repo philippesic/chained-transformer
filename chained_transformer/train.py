@@ -211,7 +211,7 @@ def main(
 
     rows = load_from_disk(str(args.data))
     if args.complete_only:
-        rows = rows.filter(lambda r: r["complete"])
+        rows = rows.filter(lambda complete: complete, input_columns="complete")
     order = list(range(len(rows)))
     random.Random(args.seed).shuffle(order)
 
