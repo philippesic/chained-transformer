@@ -20,6 +20,9 @@ BENCHMARKS = ("math500", "humanevalplus", "livecodebench")
 LR = {"sft": 1e-5, "full": 1e-5, "lora": 1e-4, "moe": 1e-5, "separate": 1e-5}
 KILL_MARGIN_POINTS = 2.0
 LORA_TIE_POINTS = 1.0
+EVERY_SEED = "every-seed"
+SEED_MEAN = "seed-mean"
+KILL_RULES = (EVERY_SEED, SEED_MEAN)
 DONE = "done"
 PLAN_OWNS = frozenset(
     [
@@ -63,6 +66,7 @@ class PilotConfig:
     eval_batch_size: int | str = "auto"
     eval_extra: list[str] = field(default_factory=list)
     device: str = "cuda"
+    kill_rule: str = EVERY_SEED
 
 
 @dataclass
@@ -285,6 +289,7 @@ def cmd_plan(args: argparse.Namespace) -> None:
         eval_batch_size=args.eval_batch_size,
         eval_extra=shlex.split(args.eval_extra),
         device=args.device,
+        kill_rule=args.kill_rule,
     )
     plan_file = root / "plan.json"
     if plan_file.exists():
@@ -305,6 +310,7 @@ def cmd_plan(args: argparse.Namespace) -> None:
     if cfg.eval_sample:
         sizes = ", ".join(f"{b} {n}" for b, n in cfg.eval_sample.items())
         print(f"verdict eval set: {sizes} problems; grows if the first arms disagree more")
+    print(f"kill rule: {cfg.kill_rule}")
 
 
 def surgery_for(cfg: PilotConfig, arm: str) -> Any:
@@ -622,8 +628,17 @@ def at_least(value: float, line: float) -> bool:
 
 
 def verdict(
-    table: dict[str, dict[int, dict[str, float]]], seeds: list[int], benchmarks: list[str]
+    table: dict[str, dict[int, dict[str, float]]],
+    seeds: list[int],
+    benchmarks: list[str],
+    rule: str = EVERY_SEED,
+    seed_se: float | None = None,
 ) -> dict[str, Any]:
+    from tools.eval_power import seed_mean_line
+
+    if rule == SEED_MEAN and seed_se is None:
+        raise ValueError("the seed-mean rule needs the per-seed SE of the margin")
+
     def primary(arm: str, seed: int) -> float | None:
         scores = table.get(arm, {}).get(seed) or {}
         if not benchmarks or any(b not in scores for b in benchmarks):
@@ -633,19 +648,34 @@ def verdict(
     margins: dict[str, dict[str, float | None]] = {}
     beats: list[bool] = []
     ties: list[bool] = []
+    over_sft: list[float] = []
+    over_moe: list[float] = []
     for seed in seeds:
         full, sft, moe, lora = (primary(a, seed) for a in ("full", "sft", "moe", "lora"))
         m: dict[str, float | None] = {"full_minus_sft": None, "full_minus_moe": None}
         if full is not None and sft is not None and moe is not None:
             beats.append(at_least(min(full - sft, full - moe), KILL_MARGIN_POINTS))
+            over_sft.append(full - sft)
+            over_moe.append(full - moe)
             m = {"full_minus_sft": round(full - sft, 2), "full_minus_moe": round(full - moe, 2)}
         if full is not None and lora is not None:
             m["lora_minus_full"] = round(lora - full, 2)
             ties.append(at_least(LORA_TIE_POINTS, abs(lora - full)))
         margins[str(seed)] = m
     complete = len(beats) == len(seeds)
+    line = seed_mean_line(seed_se, len(seeds)) if seed_se is not None else None
+    applied = f"{KILL_MARGIN_POINTS} points on every seed"
+    if rule == SEED_MEAN and line is not None:
+        applied = f"seed mean of each margin at least {line:.2f} points (one-sided 5% test)"
     if not complete:
         kill = "incomplete: some arms have no current eval of every benchmark yet"
+    elif rule == SEED_MEAN and line is not None:
+        sft_mean, moe_mean = sum(over_sft) / len(seeds), sum(over_moe) / len(seeds)
+        means = f"full - sft {sft_mean:.2f}, full - moe {moe_mean:.2f} points"
+        if at_least(sft_mean, line) and at_least(moe_mean, line):
+            kill = f"full beats sft and moe on the seed mean ({means}; line {line:.2f})"
+        else:
+            kill = f"kill rule met: a seed mean is below {line:.2f} points ({means})"
     elif all(beats):
         kill = f"full beats sft and moe by at least {KILL_MARGIN_POINTS} points on every seed"
     elif not any(beats):
@@ -661,10 +691,15 @@ def verdict(
         )
     return {
         "primary": f"mean accuracy over {', '.join(benchmarks)}, in points",
+        "rule": f"{rule}: {applied}",
         "margins": margins,
         "kill_rule": kill,
         "lora": lora_note,
     }
+
+
+def rule_se(root: Path, cfg: PilotConfig) -> float | None:
+    return float(sizing(root, cfg)["seed_se_current"]) if cfg.kill_rule == SEED_MEAN else None
 
 
 def uncounted(root: Path, trains: list[TrainRun], evals: list[EvalRun]) -> dict[str, str]:
@@ -691,24 +726,30 @@ def score_table(
 
 
 def cmd_compare(args: argparse.Namespace) -> None:
-    from tools.eval_power import kill_rule_odds
+    from tools.eval_power import kill_rule_odds, seed_mean_continue
 
     cfg, trains, evals = load_plan(args.root)
     table = score_table(args.root, trains, evals, cfg.benchmarks)
+    se = rule_se(args.root, cfg)
     result = {
         "pilot": cfg.name,
         "eval_set": cfg.eval_set,
         "scores_points": {a: {str(s): v for s, v in by.items()} for a, by in table.items()},
-        **verdict(table, cfg.seeds, cfg.benchmarks),
+        **verdict(table, cfg.seeds, cfg.benchmarks, cfg.kill_rule, se),
         "not_counted": uncounted(args.root, trains, evals),
     }
     if cfg.eval_set == "verdict":
         sized = sizing(args.root, cfg)
+        k = len(cfg.seeds)
         odds = {
-            str(g): {
-                k: round(v, 2)
-                for k, v in kill_rule_odds(g, sized["seed_se_current"], len(cfg.seeds)).items()
-            }
+            str(g): (
+                {"continue": round(seed_mean_continue(g, sized["seed_se_current"], k), 2)}
+                if cfg.kill_rule == SEED_MEAN
+                else {
+                    name: round(v, 2)
+                    for name, v in kill_rule_odds(g, sized["seed_se_current"], k).items()
+                }
+            )
             for g in (2, 3, 4)
         }
         result["verdict_sample"] = {
@@ -758,6 +799,13 @@ def main(argv: list[str] | None = None) -> None:
     )
     plan.add_argument("--eval-extra", default="", help='evals.run flags: --eval-extra="..."')
     plan.add_argument("--device", default="cuda")
+    plan.add_argument(
+        "--kill-rule",
+        choices=KILL_RULES,
+        default=EVERY_SEED,
+        help="every-seed: 2 points on every seed; seed-mean: each margin's seed mean clears a "
+        "one-sided 5%% test. Choose before any eval runs.",
+    )
     plan.add_argument("--replace", action="store_true", help="overwrite a plan with this name")
     plan.set_defaults(func=cmd_plan)
 

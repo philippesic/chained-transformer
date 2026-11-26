@@ -484,3 +484,46 @@ def test_status_reads_past_a_cut_off_training_log(tmp_path: Path) -> None:
     log = tmp_path / "train.jsonl"
     log.write_text('{"step": 3, "loss": 1.5}\n{"step": 4, "lo')
     assert pilot.last_json_line(log) == {"step": 3, "loss": 1.5}
+
+
+@pytest.mark.parametrize(
+    ("margins", "every_seed", "seed_mean"),
+    [
+        ({0: 3.0, 1: 1.0}, "mixed", "full beats sft"),
+        ({0: 2.0, 1: 0.5}, "mixed", "kill rule met"),
+        ({0: 2.0, 1: 2.0}, "full beats sft", "full beats sft"),
+        ({0: 1.0, 1: 1.0}, "kill rule met", "kill rule met"),
+        ({0: 3.0, 1: None}, "incomplete", "incomplete"),
+    ],
+)
+def test_seed_mean_rule_averages_each_margin_over_seeds(
+    margins: dict[int, float | None], every_seed: str, seed_mean: str
+) -> None:
+    benches = ["math500", "humanevalplus"]
+    table = _table(margins)
+    assert pilot.verdict(table, [0, 1], benches)["kill_rule"].startswith(every_seed)
+    result = pilot.verdict(table, [0, 1], benches, pilot.SEED_MEAN, 1.14)
+    assert result["kill_rule"].startswith(seed_mean)
+    assert result["rule"].startswith("seed-mean") and "1.33 points" in result["rule"]
+    with pytest.raises(ValueError, match="per-seed SE"):
+        pilot.verdict(table, [0, 1], benches, pilot.SEED_MEAN)
+
+
+def test_plan_records_the_kill_rule_and_compare_applies_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _plan(tmp_path, kill_rule="seed-mean")
+    assert json.loads((root / "plan.json").read_text())["config"]["kill_rule"] == "seed-mean"
+    assert "kill rule: seed-mean" in capsys.readouterr().out
+    for seed, full in ((0, 0.45), (1, 0.42)):
+        _report(root, f"sft-s{seed}", 0.40, 0.40, 0.40)
+        _report(root, f"moe-s{seed}", 0.41, 0.41, 0.41)
+        _report(root, f"lora-s{seed}", 0.43, 0.43, 0.43)
+        _report(root, f"full-s{seed}", full, full, full)
+    pilot.main(["compare", "--root", str(root)])
+    result = json.loads((root / "compare.json").read_text())
+    assert result["kill_rule"].startswith("full beats sft and moe on the seed mean")
+    odds = result["verdict_sample"]["verdict_odds_by_true_gap"]
+    assert set(odds["2"]) == {"continue"} and odds["2"]["continue"] > 0.6
+    with pytest.raises(SystemExit, match="different config"):
+        _plan(tmp_path)

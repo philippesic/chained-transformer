@@ -22,6 +22,7 @@ from tools.pilot import (
     PilotConfig,
     arms_of,
     load_plan,
+    rule_se,
     score_table,
     uncounted,
     verdict,
@@ -432,7 +433,8 @@ def notes(
 
 def build(root: Path, data_limit: int | None) -> tuple[dict[str, Any], str]:
     cfg, trains, evals = load_plan(root)
-    result = verdict(score_table(root, trains, evals, cfg.benchmarks), cfg.seeds, cfg.benchmarks)
+    table = score_table(root, trains, evals, cfg.benchmarks)
+    result = verdict(table, cfg.seeds, cfg.benchmarks, cfg.kill_rule, rule_se(root, cfg))
     result["margins_se"] = margin_errors(root, cfg)
     skipped = uncounted(root, trains, evals)
     result["not_counted"] = skipped
@@ -453,6 +455,7 @@ def build(root: Path, data_limit: int | None) -> tuple[dict[str, Any], str]:
     ]
     if result["lora"]:
         lines.append(f"LoRA: {result['lora']}.")
+    lines.append(f"Rule: {result['rule']}.")
     lines += [
         "",
         f"The rule: full must beat sft and moe by at least {KILL_MARGIN_POINTS} points of mean "

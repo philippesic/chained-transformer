@@ -157,6 +157,7 @@ def test_verdict_heads_the_report(
     lines = text.splitlines()
     assert lines[2] == f"Verdict: {data['kill_rule']}."
     assert lines[3] == f"LoRA: {data['lora']}."
+    assert lines[4] == "Rule: every-seed: 2.0 points on every seed."
     assert data["margins"]["0"]["full_minus_sft"] == round(100 * full[0] - 40.0, 2)
     assert data["margins_se"]["0"]["full_minus_sft"] == 0.0
     assert f"| 0 | {100 * full[0] - 40.0:.2f} ± 0.00 |" in text
@@ -278,3 +279,14 @@ def test_report_reads_a_cut_off_response_line_and_skips_empty_perf(tmp_path: Pat
     assert data["switching"]["full"]["responses"] == 6
     assert data["per_run"]["full"]["1"]["batch_size"] == 8.0
     assert data["per_run"]["full"]["1"]["tokens_per_s"] == pytest.approx(3000 / 20)
+
+
+def test_report_applies_the_seed_mean_rule_when_the_plan_asks(tmp_path: Path) -> None:
+    root = _pilot(tmp_path, (0.45, 0.42), (0.45, 0.42))
+    assert pilot_report.build(root, 0)[0]["kill_rule"].startswith("mixed")
+    plan = json.loads((root / "plan.json").read_text())
+    plan["config"]["kill_rule"] = "seed-mean"
+    (root / "plan.json").write_text(json.dumps(plan))
+    data, text = pilot_report.build(root, 0)
+    assert data["kill_rule"].startswith("full beats sft and moe on the seed mean")
+    assert text.splitlines()[4].startswith("Rule: seed-mean: seed mean of each margin")
