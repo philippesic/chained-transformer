@@ -125,8 +125,10 @@ def test_estimate_reads_the_plan_and_its_data(
     data = json.loads(out.read_text())
     assert data["estimate"] is True and data["row_tokens"] == 150
     gpu = data["gpus"]["5080"]
-    assert gpu["verdict_hours"][0] < gpu["total_hours"][0]
-    assert "The kill-rule verdict needs every arm but separate" in text
+    assert data["problems_per_eval"] == 60 and data["eval_set"] == "verdict"
+    assert gpu["verdict_hours"][0] <= gpu["verdict_full_suite_hours"][0] < gpu["total_hours"][0]
+    assert "Kill-rule verdict as planned (sft, full, lora and moe, 60 problems" in text
+    assert "Widened to everything, separate included" in text
     arms = data["gpus"]["2080ti"]["arms"]
     assert arms["sft"]["train_source"] == "measured"
     assert arms["full"]["train_source"] == "flops"
@@ -162,9 +164,27 @@ def test_decode_ms_replaces_the_decode_assumption(
     monkeypatch.setattr(pilot_budget, "GPUS", dict(GPUS))
     out = tmp_path / "e.json"
     pilot_budget.main(["estimate", "--gpus", "5080", "--out", str(out)])
-    slow = json.loads(out.read_text())["gpus"]["5080"]["arms"]["separate"]["eval_hours"]
+    slow = json.loads(out.read_text())["gpus"]["5080"]["arms"]["full"]["eval_hours"]
     pilot_budget.main(["estimate", "--gpus", "5080", "--decode-ms", "10", "5", "--out", str(out)])
-    fast = json.loads(out.read_text())["gpus"]["5080"]["arms"]["separate"]["eval_hours"]
+    fast = json.loads(out.read_text())["gpus"]["5080"]["arms"]["full"]["eval_hours"]
     assert fast[1] < slow[0] and fast[0] < fast[1]
     assert pilot_budget.GPUS["5080"].decode_launch_s == (0.005, 0.01)
     capsys.readouterr()
+
+
+def test_refill_sample_and_cap_each_cut_eval_time() -> None:
+    gpu = GPUS["2080ti"]
+    old = PilotConfig(name="o", data="", eval_max_new_tokens=8192, eval_extra=["--no-refill"])
+    refill = PilotConfig(name="r", data="", eval_max_new_tokens=8192)
+    capped = PilotConfig(name="c", data="")
+    sampled = pilot_budget.default_config()
+
+    def hours(cfg: PilotConfig, mean: float = 4000.0) -> tuple[float, float, int]:
+        return pilot_budget.eval_hours(cfg, SHAPE, gpu, "full", mean)
+
+    assert hours(refill, 2000.0)[1] < 0.6 * hours(old, 2000.0)[1]
+    assert hours(refill)[2] == hours(old)[2] < hours(capped)[2]
+    assert hours(capped)[1] < 0.4 * hours(old)[1]
+    assert hours(sampled)[1] < 0.7 * hours(capped)[1]
+    assert pilot_budget.eval_problems(sampled) == 886
+    assert pilot_budget.eval_hours(capped, SHAPE, gpu, "separate", 4000.0)[2] == 1

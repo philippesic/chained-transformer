@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, cast
 
 ARMS = ("sft", "full", "lora", "moe", "separate")
+VERDICT_ARMS = ("sft", "full", "lora", "moe")
+EVAL_SETS = ("verdict", "full")
 SEPARATE_MODES = ("think", "code", "answer")
 BENCHMARKS = ("math500", "humanevalplus", "livecodebench")
 LR = {"sft": 1e-5, "full": 1e-5, "lora": 1e-4, "moe": 1e-5, "separate": 1e-5}
@@ -38,7 +40,9 @@ class PilotConfig:
     train_extra: list[str] = field(default_factory=list)
     benchmarks: list[str] = field(default_factory=lambda: list(BENCHMARKS))
     eval_limit: int | None = None
-    eval_max_new_tokens: int = 8192
+    eval_max_new_tokens: int = 4096
+    eval_set: str = "full"
+    eval_sample: dict[str, int] | None = None
     eval_batch_size: int | str = "auto"
     eval_extra: list[str] = field(default_factory=list)
     device: str = "cuda"
@@ -62,10 +66,14 @@ class EvalRun:
     argv: list[str]
 
 
+def arms_of(cfg: PilotConfig) -> tuple[str, ...]:
+    return VERDICT_ARMS if cfg.eval_set == "verdict" else ARMS
+
+
 def train_runs(cfg: PilotConfig, root: Path) -> list[TrainRun]:
     runs: list[TrainRun] = []
     for seed in cfg.seeds:
-        for arm in ARMS:
+        for arm in arms_of(cfg):
             for mode in SEPARATE_MODES if arm == "separate" else (None,):
                 run_id = f"{arm}-s{seed}" + (f"-{mode}" if mode else "")
                 flags = {
@@ -93,8 +101,9 @@ def train_runs(cfg: PilotConfig, root: Path) -> list[TrainRun]:
 
 def eval_runs(cfg: PilotConfig, root: Path) -> list[EvalRun]:
     runs: list[EvalRun] = []
+    sample = cfg.eval_sample if cfg.eval_set == "verdict" else None
     for seed in cfg.seeds:
-        for arm in ARMS:
+        for arm in arms_of(cfg):
             run_id = f"{arm}-s{seed}"
             if arm == "separate":
                 needs = [f"{run_id}-{m}" for m in SEPARATE_MODES]
@@ -109,8 +118,10 @@ def eval_runs(cfg: PilotConfig, root: Path) -> list[EvalRun]:
                 "--out": root / run_id / "eval",
                 **({"--limit": cfg.eval_limit} if cfg.eval_limit else {}),
             }
-            argv = [*who, "--benchmarks", *cfg.benchmarks, "--greedy"]
+            argv = [*who, "--benchmarks", *cfg.benchmarks, "--greedy", "--resume"]
             argv += [x for k, v in flags.items() for x in (k, str(v))]
+            if sample:
+                argv += ["--sample", *(f"{b}={n}" for b, n in sample.items())]
             argv += cfg.eval_extra
             runs.append(EvalRun(run_id, arm, seed, needs, argv))
     return runs
@@ -154,6 +165,38 @@ def own_command(root: Path, kind: str, run_id: str) -> list[str]:
     return [sys.executable, "-m", "tools.pilot", kind, "--root", str(root), "--run", run_id]
 
 
+def write_plan(root: Path, cfg: PilotConfig, **extra: Any) -> tuple[list[TrainRun], list[EvalRun]]:
+    trains, evals = train_runs(cfg, root), eval_runs(cfg, root)
+    plan_file = root / "plan.json"
+    old = json.loads(plan_file.read_text()) if plan_file.exists() else {}
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    plan = {
+        **{k: v for k, v in old.items() if k in ("created", "git_head", "sizing")},
+        **extra,
+        "config": asdict(cfg),
+        "updated": now,
+        "tokens_per_run_at_most": cfg.steps * cfg.grad_accum * cfg.seq_len,
+        "train": [asdict(r) for r in trains],
+        "eval": [asdict(r) for r in evals],
+    }
+    plan.setdefault("created", now)
+    if "git_head" not in plan:
+        plan["git_head"] = git_head()
+    root.mkdir(parents=True, exist_ok=True)
+    plan_file.write_text(json.dumps(plan, indent=2) + "\n")
+    lines = ["#!/bin/sh", "set -e", f"# pilot {cfg.name}: run with python -m tools.pilot run"]
+    lines += [shlex.join(own_command(root, k, i)) for k, i in ordered_steps(trains, evals)]
+    (root / "commands.sh").write_text("\n".join(lines) + "\n")
+    return trains, evals
+
+
+def first_sample(benchmarks: list[str]) -> dict[str, int]:
+    from tools.eval_power import ASSUMED_DISCORDANCE, FULL_SIZES, required_sizes
+
+    available = {b: FULL_SIZES[b] for b in benchmarks}
+    return required_sizes(dict.fromkeys(available, ASSUMED_DISCORDANCE), available)
+
+
 def cmd_plan(args: argparse.Namespace) -> None:
     root: Path = args.root / args.name
     cfg = PilotConfig(
@@ -169,7 +212,9 @@ def cmd_plan(args: argparse.Namespace) -> None:
         train_extra=shlex.split(args.train_extra),
         benchmarks=args.benchmarks,
         eval_limit=args.eval_limit,
-        eval_max_new_tokens=args.eval_max_new_tokens,
+        eval_max_new_tokens=args.eval_max_new_tokens or args.seq_len,
+        eval_set=args.eval_set,
+        eval_sample=first_sample(args.benchmarks) if args.eval_set == "verdict" else None,
         eval_batch_size=args.eval_batch_size,
         eval_extra=shlex.split(args.eval_extra),
         device=args.device,
@@ -179,23 +224,13 @@ def cmd_plan(args: argparse.Namespace) -> None:
         old = json.loads(plan_file.read_text())["config"]
         if old != asdict(cfg) and not args.replace:
             raise SystemExit(f"{plan_file} exists with a different config; pick a new --name")
-    trains, evals = train_runs(cfg, root), eval_runs(cfg, root)
-    root.mkdir(parents=True, exist_ok=True)
-    plan = {
-        "config": asdict(cfg),
-        "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "git_head": git_head(),
-        "tokens_per_run_at_most": cfg.steps * cfg.grad_accum * cfg.seq_len,
-        "train": [asdict(r) for r in trains],
-        "eval": [asdict(r) for r in evals],
-    }
-    plan_file.write_text(json.dumps(plan, indent=2) + "\n")
-    lines = ["#!/bin/sh", "set -e", f"# pilot {cfg.name}: run with python -m tools.pilot run"]
-    lines += [shlex.join(own_command(root, k, i)) for k, i in ordered_steps(trains, evals)]
-    (root / "commands.sh").write_text("\n".join(lines) + "\n")
+    trains, evals = write_plan(root, cfg)
     print(f"plan: {plan_file}")
     print(f"{len(trains)} training runs, {len(evals)} eval runs, nothing started")
-    print(f"at most {plan['tokens_per_run_at_most']:,} tokens per training run")
+    print(f"at most {cfg.steps * cfg.grad_accum * cfg.seq_len:,} tokens per training run")
+    if cfg.eval_sample:
+        sizes = ", ".join(f"{b} {n}" for b, n in cfg.eval_sample.items())
+        print(f"verdict eval set: {sizes} problems; grows if the first arms disagree more")
 
 
 def surgery_for(cfg: PilotConfig, arm: str) -> Any:
@@ -282,18 +317,107 @@ def ordered_steps(trains: list[TrainRun], evals: list[EvalRun]) -> list[tuple[st
     return steps + [("eval-one", e.id) for e in waiting]
 
 
+def step_argv(trains: list[TrainRun], evals: list[EvalRun]) -> dict[tuple[str, str], list[str]]:
+    steps = {("train-one", r.id): r.argv for r in trains}
+    return steps | {("eval-one", e.id): e.argv for e in evals}
+
+
+def step_done(root: Path, kind: str, run_id: str, argv: list[str]) -> bool:
+    status = read_status(root, run_id, "train" if kind == "train-one" else "eval")
+    return bool(status["state"] == DONE and status.get("argv") == argv)
+
+
 def pending_steps(
     root: Path, trains: list[TrainRun], evals: list[EvalRun], only: list[str]
 ) -> list[tuple[str, str]]:
     def wanted(run_id: str) -> bool:
         return not only or any(run_id == o or run_id.startswith(f"{o}-") for o in only)
 
-    kinds = {"train-one": "train", "eval-one": "eval"}
+    argv = step_argv(trains, evals)
     return [
         (k, i)
         for k, i in ordered_steps(trains, evals)
-        if wanted(i) and read_status(root, i, kinds[k])["state"] != DONE
+        if wanted(i) and not step_done(root, k, i, argv[(k, i)])
     ]
+
+
+def scores_of(root: Path, run_id: str, bench: str) -> dict[str, bool]:
+    path = root / run_id / "eval" / bench / "scores.jsonl"
+    if not path.exists():
+        return {}
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    return {str(r["task_id"]): bool(r["passed"]) for r in rows}
+
+
+def available_sizes(root: Path, cfg: PilotConfig) -> dict[str, int]:
+    from tools.eval_power import FULL_SIZES
+
+    sizes = {b: FULL_SIZES[b] for b in cfg.benchmarks}
+    for arm in VERDICT_ARMS:
+        for seed in cfg.seeds:
+            report = root / f"{arm}-s{seed}" / "eval" / "report.json"
+            if report.exists():
+                benches = json.loads(report.read_text()).get("benchmarks", {})
+                for b in cfg.benchmarks:
+                    if benches.get(b, {}).get("n_available"):
+                        sizes[b] = int(benches[b]["n_available"])
+    if cfg.eval_limit:
+        sizes = {b: min(n, cfg.eval_limit) for b, n in sizes.items()}
+    return sizes
+
+
+def observed_discordance(root: Path, cfg: PilotConfig) -> dict[str, dict[str, Any]]:
+    from tools.eval_power import MIN_SAMPLE, discordance_of
+
+    seen: dict[str, dict[str, Any]] = {}
+    for bench in cfg.benchmarks:
+        pairs: dict[str, Any] = {}
+        for seed in cfg.seeds:
+            full = scores_of(root, f"full-s{seed}", bench)
+            for other in ("sft", "moe"):
+                d, n = discordance_of(full, scores_of(root, f"{other}-s{seed}", bench))
+                if n >= MIN_SAMPLE:
+                    pairs[f"full-{other}-s{seed}"] = {"discordance": round(d, 4), "shared": n}
+        if pairs:
+            seen[bench] = {"max": max(p["discordance"] for p in pairs.values()), "pairs": pairs}
+    return seen
+
+
+def sizing(root: Path, cfg: PilotConfig) -> dict[str, Any]:
+    from tools.eval_power import ASSUMED_DISCORDANCE, power_at, required_sizes, seed_se
+
+    available = available_sizes(root, cfg)
+    seen = observed_discordance(root, cfg)
+    disc = {b: seen[b]["max"] if b in seen else ASSUMED_DISCORDANCE for b in available}
+    current = dict(cfg.eval_sample or available)
+    current = {b: min(current.get(b, available[b]), available[b]) for b in available}
+    needed = required_sizes(disc, available)
+    grown = {b: max(current[b], needed[b]) for b in available}
+    return {
+        "discordance": disc,
+        "observed": seen,
+        "current": current,
+        "needed": needed,
+        "grown": grown,
+        "power_at_current": round(power_at(seed_se(disc, current)), 3),
+        "power_at_grown": round(power_at(seed_se(disc, grown)), 3),
+        "power_full_suite": round(power_at(seed_se(disc, available)), 3),
+    }
+
+
+def resize(root: Path) -> dict[str, int] | None:
+    cfg, _, _ = load_plan(root)
+    if cfg.eval_set != "verdict":
+        return None
+    result = sizing(root, cfg)
+    if result["grown"] == result["current"]:
+        return None
+    plan = json.loads((root / "plan.json").read_text())
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    history = [*plan.get("sizing", []), {"at": now, "from": result["current"], **result}]
+    cfg.eval_sample = result["grown"]
+    write_plan(root, cfg, sizing=history)
+    return cast("dict[str, int]", result["grown"])
 
 
 def cmd_run(args: argparse.Namespace) -> None:
@@ -304,7 +428,19 @@ def cmd_run(args: argparse.Namespace) -> None:
             print(shlex.join(own_command(args.root, kind, run_id)))
         print(f"{len(todo)} steps pending" + (" (dry run, nothing started)" if todo else ""))
         return
-    for kind, run_id in todo:
+    tried: set[tuple[str, str, str]] = set()
+    while True:
+        cfg, trains, evals = load_plan(args.root)
+        argv = step_argv(trains, evals)
+        todo = [
+            (k, i)
+            for k, i in pending_steps(args.root, trains, evals, args.only)
+            if (k, i, json.dumps(argv[(k, i)])) not in tried
+        ]
+        if not todo:
+            return
+        kind, run_id = todo[0]
+        tried.add((kind, run_id, json.dumps(argv[(kind, run_id)])))
         if cfg.device.startswith("cuda") and not args.allow_busy_gpu:
             busy = other_gpu_processes()
             if busy:
@@ -324,6 +460,34 @@ def cmd_run(args: argparse.Namespace) -> None:
             print(f"{kind} {run_id} failed with exit code {code}; see {log_path}")
             if not args.keep_going:
                 raise SystemExit(code)
+        elif kind == "eval-one":
+            grown = resize(args.root)
+            if grown:
+                print(f"verdict eval set grown to {grown}; earlier evals resume", flush=True)
+
+
+def cmd_size(args: argparse.Namespace) -> None:
+    cfg, _, _ = load_plan(args.root)
+    result = sizing(args.root, cfg)
+    print(json.dumps({"eval_set": cfg.eval_set, **result}, indent=2))
+    if args.apply:
+        grown = resize(args.root)
+        print(f"grown to {grown}" if grown else "no change")
+
+
+def cmd_widen(args: argparse.Namespace) -> None:
+    cfg, _, _ = load_plan(args.root)
+    if cfg.eval_set == "full":
+        print("already the full suite with every arm")
+        return
+    plan = json.loads((args.root / "plan.json").read_text())
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    history = [*plan.get("sizing", []), {"at": now, "widened_from": cfg.eval_sample}]
+    cfg.eval_set, cfg.eval_sample = "full", None
+    trains, evals = write_plan(args.root, cfg, sizing=history)
+    todo = pending_steps(args.root, trains, evals, [])
+    print(f"full suite and the separate arm added; {len(todo)} steps pending")
+    print("evals resume: problems already answered are kept, only the rest are generated")
 
 
 def last_json_line(path: Path) -> dict[str, Any] | None:
@@ -345,8 +509,14 @@ def cmd_status(args: argparse.Namespace) -> None:
             f"{last.get('peak_alloc_gib', ''):>9}"
         )
     print()
+    if cfg.eval_sample and cfg.eval_set == "verdict":
+        print("verdict eval set: " + ", ".join(f"{b} {n}" for b, n in cfg.eval_sample.items()))
     for e in evals:
-        print(f"{e.id:<22} eval {read_status(args.root, e.id, 'eval')['state']}")
+        status = read_status(args.root, e.id, "eval")
+        state = status["state"]
+        if state == DONE and status.get("argv") != e.argv:
+            state = "done, resumes for the current plan"
+        print(f"{e.id:<22} eval {state}")
 
 
 def eval_scores(root: Path, run_id: str) -> dict[str, float] | None:
@@ -422,9 +592,18 @@ def cmd_compare(args: argparse.Namespace) -> None:
     table = score_table(args.root, evals)
     result = {
         "pilot": cfg.name,
+        "eval_set": cfg.eval_set,
         "scores_points": {a: {str(s): v for s, v in by.items()} for a, by in table.items()},
         **verdict(table, cfg.seeds),
     }
+    if cfg.eval_set == "verdict":
+        sized = sizing(args.root, cfg)
+        result["verdict_sample"] = {
+            "problems": sized["current"],
+            "discordance": sized["discordance"],
+            "observed": bool(sized["observed"]),
+            "power_for_a_2_point_gap": sized["power_at_current"],
+        }
     text = json.dumps(result, indent=2) + "\n"
     (args.root / "compare.json").write_text(text)
     print(text)
@@ -448,7 +627,15 @@ def main(argv: list[str] | None = None) -> None:
     plan.add_argument("--train-extra", default="", help='train.py flags: --train-extra="..."')
     plan.add_argument("--benchmarks", nargs="+", choices=BENCHMARKS, default=list(BENCHMARKS))
     plan.add_argument("--eval-limit", type=int)
-    plan.add_argument("--eval-max-new-tokens", type=int, default=8192)
+    plan.add_argument(
+        "--eval-set",
+        choices=EVAL_SETS,
+        default="verdict",
+        help="verdict: the sample the kill rule needs, no separate arm; full: everything",
+    )
+    plan.add_argument(
+        "--eval-max-new-tokens", type=int, help="default: --seq-len, the longest row trained on"
+    )
     plan.add_argument(
         "--eval-batch-size", type=eval_batch, default="auto", help="N, or auto to fill the GPU"
     )
@@ -470,6 +657,15 @@ def main(argv: list[str] | None = None) -> None:
     run.add_argument("--keep-going", action="store_true")
     run.add_argument("--allow-busy-gpu", action="store_true")
     run.set_defaults(func=cmd_run)
+
+    size = sub.add_parser("size", help="show the verdict sample the observed scores call for")
+    size.add_argument("--root", type=Path, required=True)
+    size.add_argument("--apply", action="store_true", help="grow the plan's sample to match")
+    size.set_defaults(func=cmd_size)
+
+    widen = sub.add_parser("widen", help="switch to the full suite and add the separate arm")
+    widen.add_argument("--root", type=Path, required=True)
+    widen.set_defaults(func=cmd_widen)
 
     for name, func in (("status", cmd_status), ("compare", cmd_compare)):
         view = sub.add_parser(name)

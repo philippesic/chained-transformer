@@ -14,7 +14,15 @@ from pathlib import Path
 from typing import Any
 
 from chained_transformer.memory import QWEN3_0_6B, ModelShape
-from tools.pilot import ARMS, PilotConfig, load_plan, other_gpu_processes
+from tools.pilot import (
+    ARMS,
+    BENCHMARKS,
+    PilotConfig,
+    arms_of,
+    first_sample,
+    load_plan,
+    other_gpu_processes,
+)
 
 PHASES = ("forward", "backward", "optimizer")
 PROBLEMS = {"math500": 500, "humanevalplus": 164, "livecodebench": 880}
@@ -48,9 +56,16 @@ ASSUMPTIONS = [
     "Every row is assumed to fill --seq-len unless the plan's data is readable, in which case "
     "the mean row length is used.",
     "Decoding: Hugging Face generate is launch-bound, about 20 to 45 ms per step for 28 layers, "
-    "plus weight and KV-cache reads at the card's bandwidth. A batch runs as long as its longest "
-    "response: 1.5 times the mean at best, the token cap at worst.",
+    "plus weight and KV-cache reads at the card's bandwidth.",
+    "Without refill a batch runs as long as its longest response: 1.5 times the mean at best, "
+    "the token cap at worst. With refill (the default) finished rows are replaced once half "
+    "the batch is done, so at least 75% (best) or 50% (worst) of the batch is decoding, and "
+    "never less than without refill; each benchmark ends with one longest-response tail, and "
+    "every problem is prefilled once (best) or twice (worst) at the training utilisation.",
+    "Responses average the --mean-new-tokens value or the token cap, whichever is lower.",
     "separate decodes at batch 1; the other arms use the auto batch from free memory.",
+    "Scoring is left out: HumanEval+ took about 22 s per eval run on this CPU (measured) and "
+    "MATH-500 is string matching; LiveCodeBench scoring is not measured (its data is on the Hub).",
 ]
 
 
@@ -153,6 +168,15 @@ def train_hours(
     return runs * lo / 3600, runs * hi / 3600
 
 
+def eval_problems(cfg: PilotConfig) -> int:
+    sizes = {b: PROBLEMS.get(b, 0) for b in cfg.benchmarks}
+    if cfg.eval_set == "verdict" and cfg.eval_sample:
+        sizes = {b: min(n, cfg.eval_sample.get(b, n)) for b, n in sizes.items()}
+    if cfg.eval_limit:
+        sizes = {b: min(n, cfg.eval_limit) for b, n in sizes.items()}
+    return sum(sizes.values())
+
+
 def eval_hours(
     cfg: PilotConfig, shape: ModelShape, gpu: Gpu, arm: str, mean_tokens: float
 ) -> tuple[float, float, int]:
@@ -160,26 +184,73 @@ def eval_hours(
     batch = auto_batch(shape, gpu, arm, cap)
     if isinstance(cfg.eval_batch_size, int):
         batch = 1 if arm == "separate" else cfg.eval_batch_size
-    problems = sum(
-        min(PROBLEMS.get(b, 0), cfg.eval_limit or PROBLEMS.get(b, 0)) for b in cfg.benchmarks
-    )
+    problems = eval_problems(cfg)
     mean = min(mean_tokens, cap)
+    refill = batch > 1 and "--no-refill" not in cfg.eval_extra
+    benches = len(cfg.benchmarks)
+    prefill_flops = 2 * weight_bytes(shape, arm) / 2 * problems * (PROMPT_TOKENS + mean / 2)
     out = []
-    for launch, longest in (
-        (gpu.decode_launch_s[0], mean if batch == 1 else min(cap, 1.5 * mean)),
-        (gpu.decode_launch_s[1], mean if batch == 1 else cap),
+    for launch, longest, floor, prefills, mfu in (
+        (gpu.decode_launch_s[0], min(cap, 1.5 * mean), 0.75, 1, gpu.mfu[1]),
+        (gpu.decode_launch_s[1], cap, 0.5, 2, gpu.mfu[0]),
     ):
+        longest = mean if batch == 1 else longest
         reads = weight_bytes(shape, arm) + batch * kv_bytes_per_token(shape) * (
             PROMPT_TOKENS + longest / 2
         )
         step = launch + reads / (gpu.bandwidth_gbs * 1e9)
-        seconds = math.ceil(problems / batch) * longest * step
-        out.append(len(cfg.seeds) * seconds / 3600)
+        if refill:
+            busy = max(mean / longest, floor)
+            steps = problems * mean / (busy * batch) + benches * longest
+        else:
+            steps, prefills = math.ceil(problems / batch) * longest, 1
+        prefill = prefills * prefill_flops / (gpu.tflops * 1e12 * mfu)
+        out.append(len(cfg.seeds) * (steps * step + prefill) / 3600)
     return out[0], out[1], batch
 
 
 def span(lo: float, hi: float) -> str:
     return f"{lo:.1f}" if abs(hi - lo) < 0.05 else f"{lo:.1f} to {hi:.1f}"
+
+
+def days(hours: list[float]) -> str:
+    return f"{span(*hours)} hours ({span(hours[0] / 24, hours[1] / 24)} days)"
+
+
+def plan_hours(
+    cfg: PilotConfig,
+    shape: ModelShape,
+    gpu: Gpu,
+    measured: dict[str, dict[str, float]],
+    tokens: float,
+    mean_tokens: float,
+) -> tuple[dict[str, Any], list[list[str]], list[float]]:
+    per_arm: dict[str, Any] = {}
+    rows = []
+    total = [0.0, 0.0]
+    for arm in arms_of(cfg):
+        source = measured.get(arm)
+        t_lo, t_hi = train_hours(cfg, shape, gpu, arm, tokens, source)
+        e_lo, e_hi, batch = eval_hours(cfg, shape, gpu, arm, mean_tokens)
+        total[0] += t_lo + e_lo
+        total[1] += t_hi + e_hi
+        per_arm[arm] = {
+            "train_hours": [round(t_lo, 2), round(t_hi, 2)],
+            "train_source": "measured" if source else "flops",
+            "eval_hours": [round(e_lo, 2), round(e_hi, 2)],
+            "eval_batch": batch,
+        }
+        rows.append(
+            [
+                arm,
+                str(RUNS_PER_SEED[arm] * len(cfg.seeds)),
+                span(t_lo, t_hi) + (" (measured)" if source else ""),
+                str(batch),
+                span(e_lo, e_hi),
+                span(t_lo + e_lo, t_hi + e_hi),
+            ]
+        )
+    return per_arm, rows, [round(total[0], 1), round(total[1], 1)]
 
 
 def estimate(
@@ -192,13 +263,19 @@ def estimate(
 ) -> tuple[dict[str, Any], str]:
     rows_known = row_tokens is not None
     tokens = row_tokens if row_tokens is not None else float(cfg.seq_len)
+    verdict_mode = cfg.eval_set == "verdict"
+    grown = replace(cfg, eval_sample=None)
+    widened = replace(cfg, eval_set="full", eval_sample=None)
     result: dict[str, Any] = {
         "estimate": True,
         "assumptions": ASSUMPTIONS,
         "row_tokens": tokens,
         "mean_new_tokens": mean_tokens,
+        "eval_set": cfg.eval_set,
+        "problems_per_eval": eval_problems(cfg),
         "gpus": {},
     }
+    refill = "off" if "--no-refill" in cfg.eval_extra else "on"
     lines = [
         "# Pilot GPU time: an estimate, not a measurement",
         "",
@@ -206,53 +283,47 @@ def estimate(
         f"{tokens:.0f} tokens ({'mean of the data' if rows_known else 'every row full'}), "
         f"benchmarks {', '.join(cfg.benchmarks)}"
         + (f" (first {cfg.eval_limit} problems each)" if cfg.eval_limit else "")
-        + f", up to {cfg.eval_max_new_tokens} new tokens with an assumed mean of "
-        f"{mean_tokens:.0f}.",
+        + f", {eval_problems(cfg)} problems per eval run ({cfg.eval_set} set), up to "
+        f"{cfg.eval_max_new_tokens} new tokens with an assumed mean of {mean_tokens:.0f}, "
+        f"refill {refill}.",
         "",
     ]
     for key in gpus:
         gpu = GPUS[key]
-        rows = []
-        per_arm: dict[str, Any] = {}
-        total = [0.0, 0.0]
-        verdict = [0.0, 0.0]
-        for arm in ARMS:
-            source = measured.get(key, {}).get(arm)
-            t_lo, t_hi = train_hours(cfg, shape, gpu, arm, tokens, source)
-            e_lo, e_hi, batch = eval_hours(cfg, shape, gpu, arm, mean_tokens)
-            total[0] += t_lo + e_lo
-            total[1] += t_hi + e_hi
-            if arm != "separate":
-                verdict[0] += t_lo + e_lo
-                verdict[1] += t_hi + e_hi
-            per_arm[arm] = {
-                "train_hours": [round(t_lo, 2), round(t_hi, 2)],
-                "train_source": "measured" if source else "flops",
-                "eval_hours": [round(e_lo, 2), round(e_hi, 2)],
-                "eval_batch": batch,
-            }
-            rows.append(
-                [
-                    arm,
-                    str(RUNS_PER_SEED[arm] * len(cfg.seeds)),
-                    span(t_lo, t_hi) + (" (measured)" if source else ""),
-                    str(batch),
-                    span(e_lo, e_hi),
-                    span(t_lo + e_lo, t_hi + e_hi),
-                ]
-            )
-        result["gpus"][key] = {
-            "name": gpu.name,
-            "arms": per_arm,
-            "total_hours": [round(total[0], 1), round(total[1], 1)],
-            "verdict_hours": [round(verdict[0], 1), round(verdict[1], 1)],
-        }
+        got = measured.get(key, {})
+        per_arm, rows, planned = plan_hours(cfg, shape, gpu, got, tokens, mean_tokens)
+        everything = plan_hours(widened, shape, gpu, got, tokens, mean_tokens)[2]
+        info: dict[str, Any] = {"name": gpu.name, "arms": per_arm, "total_hours": everything}
+        if verdict_mode:
+            full_sample = plan_hours(grown, shape, gpu, got, tokens, mean_tokens)[2]
+            info |= {"verdict_hours": planned, "verdict_full_suite_hours": full_sample}
+            summary = [
+                f"Kill-rule verdict as planned (sft, full, lora and moe, "
+                f"{eval_problems(cfg)} problems per eval): about {days(planned)}.",
+                "",
+                "If the arms disagree on 15% or more of the problems, the sample grows to the "
+                f"whole suite: about {days(full_sample)}.",
+                "",
+                f"Widened to everything, separate included: about {days(everything)} in total.",
+            ]
+        else:
+            verdict = [0.0, 0.0]
+            for arm, v in per_arm.items():
+                if arm != "separate":
+                    verdict[0] += v["train_hours"][0] + v["eval_hours"][0]
+                    verdict[1] += v["train_hours"][1] + v["eval_hours"][1]
+            info["verdict_hours"] = [round(verdict[0], 1), round(verdict[1], 1)]
+            summary = [
+                f"Everything: about {days(planned)}.",
+                "",
+                "The kill-rule verdict needs every arm but separate, which runs last: about "
+                f"{span(*info['verdict_hours'])} hours.",
+            ]
+        result["gpus"][key] = info
         lines += [
-            f"## {gpu.name}: about {span(*total)} hours "
-            f"({span(total[0] / 24, total[1] / 24)} days)",
+            f"## {gpu.name}",
             "",
-            f"The kill-rule verdict needs every arm but separate, which runs last: about "
-            f"{span(*verdict)} hours.",
+            *summary,
             "",
             "| arm | train runs | train h | eval batch | eval h | total h |",
             "|---|---|---|---|---|---|",
@@ -261,6 +332,12 @@ def estimate(
         ]
     lines += ["## Assumptions", "", *(f"- {a}" for a in ASSUMPTIONS), ""]
     return result, "\n".join(lines)
+
+
+def default_config() -> PilotConfig:
+    return PilotConfig(
+        name="default", data="", eval_set="verdict", eval_sample=first_sample(list(BENCHMARKS))
+    )
 
 
 class PhaseTimer:
@@ -414,7 +491,7 @@ def cmd_measure(args: argparse.Namespace) -> None:
 
 
 def cmd_estimate(args: argparse.Namespace) -> None:
-    cfg = PilotConfig(name="default", data="") if args.root is None else load_plan(args.root)[0]
+    cfg = default_config() if args.root is None else load_plan(args.root)[0]
     measured = {}
     for item in args.measured:
         key, _, path = item.partition("=")

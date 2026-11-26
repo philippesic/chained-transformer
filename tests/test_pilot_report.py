@@ -38,6 +38,8 @@ def _plan(tmp_path: Path) -> Path:
             "--benchmarks",
             "math500",
             "humanevalplus",
+            "--eval-set",
+            "full",
         ]
     )
     return tmp_path / "p"

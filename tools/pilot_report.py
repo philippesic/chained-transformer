@@ -16,11 +16,11 @@ from chained_transformer.modes import MODE_NAMES
 from chained_transformer.surgery import LoRALinear, ModeMLP, MoEMLP
 from evals.switch_stats import SWITCH_BUCKETS, from_dataset, read_jsonl, summarize
 from tools.pilot import (
-    ARMS,
     KILL_MARGIN_POINTS,
     LORA_TIE_POINTS,
     EvalRun,
     PilotConfig,
+    arms_of,
     load_plan,
     score_table,
     verdict,
@@ -192,7 +192,7 @@ def switching(
     data = Path(cfg.data)
     if data_limit != 0 and (data / "dataset_info.json").exists():
         out["data"] = from_dataset(data, data_limit)
-    for arm in ARMS:
+    for arm in arms_of(cfg):
         runs, passed = traces(root, [e.id for e in evals if e.arm == arm])
         if runs:
             known = passed if any(p is not None for p in passed) else None
@@ -241,7 +241,7 @@ def table_main(cfg: PilotConfig, stats: dict[str, dict[int, Stats]]) -> list[str
     ]
     headers = ["arm", *(h for _, h, _ in cols), "params", "active"]
     rows = []
-    for arm in ARMS:
+    for arm in arms_of(cfg):
         by_seed = stats.get(arm, {})
         cells = [seeded(by_seed, cfg.seeds, k, d) for k, _, d in cols]
         rows.append(
@@ -371,7 +371,7 @@ def table_serving(cfg: PilotConfig, stats: dict[str, dict[int, Stats]]) -> list[
             seeded(stats.get(arm, {}), cfg.seeds, "tokens_per_s", 0),
             fmt(first(stats.get(arm, {}), "batch_size"), 0),
         ]
-        for arm in ARMS
+        for arm in arms_of(cfg)
         if arm != "sft"
     ]
     return markdown_table(
@@ -409,6 +409,13 @@ def build(root: Path, data_limit: int | None) -> tuple[dict[str, Any], str]:
     stats = collect(root, evals)
     sw = switching(root, cfg, evals, data_limit)
     remarks = notes(root, evals, stats)
+    if cfg.eval_set == "verdict" and cfg.eval_sample:
+        sizes = ", ".join(f"{b} {n}" for b, n in cfg.eval_sample.items())
+        remarks.insert(
+            0,
+            f"Scores are on the verdict sample ({sizes} problems) and the separate arm is not "
+            "run; python -m tools.pilot widen gives full-benchmark numbers for the paper.",
+        )
     lines = [
         f"# Pilot results: {cfg.name}",
         "",
