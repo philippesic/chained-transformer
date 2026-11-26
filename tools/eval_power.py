@@ -65,6 +65,24 @@ def kill_rule_odds(
     return {"seed_passes": p, "continue": keep, "mixed": max(0.0, 1 - keep - kill), "kill": kill}
 
 
+def seed_mean_line(se: float, seeds: int = SEEDS, alpha: float = ALPHA) -> float:
+    return NormalDist().inv_cdf(1 - alpha) * se / math.sqrt(seeds)
+
+
+def seed_mean_continue(
+    gap: float,
+    se: float,
+    seeds: int = SEEDS,
+    rho: float = MARGIN_CORRELATION,
+    training_sd: float = 0.0,
+    alpha: float = ALPHA,
+) -> float:
+    if se <= 0 and training_sd <= 0:
+        return 1.0 if gap > 0 else 0.0
+    spread = math.hypot(se, training_sd) / math.sqrt(seeds)
+    return both_clear(gap, spread, seed_mean_line(se, seeds, alpha), rho)
+
+
 def required_sizes(
     discordance: Mapping[str, float],
     available: Mapping[str, int],
@@ -122,13 +140,15 @@ def odds_table(
     gaps: list[float], se: float, seed_counts: list[int], rho: float, training_sd: float
 ) -> list[str]:
     head = " | ".join(f"{k} seeds: continue / mixed / kill" for k in seed_counts)
-    lines = [f"| true gap | one seed clears | {head} |"]
-    lines.append("| ---: | ---: |" + " --- |" * len(seed_counts))
+    means = " | ".join(f"seed mean, {k} seeds: continue" for k in seed_counts)
+    lines = [f"| true gap | one seed clears | {head} | {means} |"]
+    lines.append("| ---: | ---: |" + " --- |" * len(seed_counts) + " ---: |" * len(seed_counts))
     for g in gaps:
         cells = []
         for k in seed_counts:
             o = kill_rule_odds(g, se, k, rho, training_sd)
             cells.append(f"{o['continue']:.0%} / {o['mixed']:.0%} / {o['kill']:.0%}")
+        cells += [f"{seed_mean_continue(g, se, k, rho, training_sd):.0%}" for k in seed_counts]
         p = kill_rule_odds(g, se, 1, rho, training_sd)["seed_passes"]
         lines.append(f"| {g:g} | {p:.0%} | " + " | ".join(cells) + " |")
     return lines
@@ -154,6 +174,11 @@ def main(argv: list[str] | None = None) -> None:
             f"continue needs full - sft and full - moe both >= {GAP_POINTS} points on every seed; "
             f"per-seed SE {se:.2f}, correlation {args.rho} between the two margins, "
             f"seed-to-seed training SD {args.training_sd}"
+        )
+        lines = ", ".join(f"{seed_mean_line(se, k):.2f} points with {k} seeds" for k in args.seeds)
+        print(
+            f"seed mean (not what pilot compare applies): continue when the seed mean of both "
+            f"margins clears a one-sided {ALPHA} test at this SE, {lines}"
         )
         print("\n".join(odds_table(args.gaps, se, args.seeds, args.rho, args.training_sd)))
         return

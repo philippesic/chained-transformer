@@ -97,5 +97,32 @@ def test_zero_standard_error_does_not_divide_by_zero(capsys: pytest.CaptureFixtu
 def test_main_prints_the_odds_table(capsys: pytest.CaptureFixture[str]) -> None:
     eval_power.main(["--odds", "--gaps", "2", "4"])
     out = capsys.readouterr().out
-    assert "| 2 | 33% | 11% / 44% / 44% | 4% / 67% / 30% |" in out
-    assert "| 4 | 93% | 86% / 13% / 0% | 80% / 20% / 0% |" in out
+    assert "| 2 | 33% | 11% / 44% / 44% | 4% / 67% / 30% | 69% | 86% |" in out
+    assert "| 4 | 93% | 86% / 13% / 0% | 80% / 20% / 0% | 100% | 100% |" in out
+    assert "1.32 points with 2 seeds" in out
+
+
+def test_seed_mean_rule_with_one_margin_is_the_test_the_sample_was_sized_for() -> None:
+    target = eval_power.target_seed_se()
+    assert eval_power.seed_mean_continue(2.0, target, rho=1.0) == pytest.approx(0.8, abs=1e-4)
+    assert eval_power.seed_mean_continue(0.0, target, rho=1.0) == pytest.approx(0.05, abs=1e-4)
+    assert eval_power.seed_mean_continue(2.0, 1.14, rho=1.0) == pytest.approx(
+        power_at(1.14), abs=1e-4
+    )
+
+
+@pytest.mark.parametrize("gap", [1.0, 2.0, 3.0])
+def test_a_third_seed_helps_the_seed_mean_rule(gap: float) -> None:
+    two = eval_power.seed_mean_continue(gap, 1.14, seeds=2)
+    assert eval_power.seed_mean_continue(gap, 1.14, seeds=3) > two
+    assert eval_power.seed_mean_continue(0.0, 1.14, seeds=3) < 0.05
+    assert eval_power.seed_mean_continue(gap, 0.0) == 1.0
+    assert eval_power.seed_mean_continue(0.0, 0.0) == 0.0
+
+
+def test_training_noise_the_seed_mean_line_ignores_raises_false_continues() -> None:
+    quiet = [eval_power.seed_mean_continue(g, 1.14, rho=1.0) for g in (0.0, 2.0)]
+    noisy = [eval_power.seed_mean_continue(g, 1.14, rho=1.0, training_sd=1.0) for g in (0.0, 2.0)]
+    assert quiet[0] == pytest.approx(0.05, abs=1e-4)
+    assert quiet[0] < noisy[0]
+    assert noisy[1] < quiet[1]
