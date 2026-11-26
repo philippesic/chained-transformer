@@ -15,7 +15,7 @@ elsewhere without asking.
 - [Design](docs/design.md): terms (mode, position mode, segment label, trunk, arm, complete
   row) and how tracking, surgery, generation, data, training and evals work.
 - [Development](docs/development.md): environment, check lanes, GPU sharing, conventions.
-- [Tasks](tasks/README.md): unfinished-work convention. Active: [first experiment](tasks/first-experiment.md).
+- [Tasks](tasks/README.md): unfinished-work convention. Active: [first experiment](tasks/first-experiment.md); [cloud/harness runbook](tasks/runbook-cloud-harness.md) for its first GPU runs.
 - [FINDINGS](FINDINGS.md): index of results in `results/`.
 
 ## Code map
@@ -25,7 +25,10 @@ elsewhere without asking.
 - `chained_transformer/generate.py`: the mode-tracking generation hook and the separate-models baseline.
 - `chained_transformer/model.py`: base model loading and arm construction.
 - `chained_transformer/data.py`, `chained_transformer/train.py`, `chained_transformer/evals.py`: entry points (`python -m ...`).
-- `tools/check.py`: the commit gate. `tools/gpu_equivalence.py`, `tools/gpu_smoke.py`: hardware lanes.
+- `chained_transformer/mix.py`: per-row switching statistics and the data mix policies.
+- `chained_transformer/optim.py`: `ChunkedAdamW8bit`. `chained_transformer/attention.py`: the fused-only attention. `chained_transformer/memory.py`: the training memory estimate.
+- `tools/check.py`: the commit gate. `tools/gpu_equivalence.py`, `tools/gpu_smoke.py`, `tools/memory_check.py`: hardware lanes. `tools/memtrace.py`: CPU live-bytes tracker. `tools/mode_probe.py`: linear probes for mode on base hidden states.
+- `docs/routing-and-looping.md`: design note on combining mode routing with looped layers.
 
 ## Rules
 

@@ -146,23 +146,27 @@ class MoEMLP(nn.Module):
         self.top_k = top_k
         self.aux_loss: torch.Tensor | None = None
 
+    def route(self, flat: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        logits = F.linear(flat.float(), self.router.weight.float())
+        probs = F.softmax(logits, dim=-1)
+        weights, chosen = probs.topk(self.top_k, dim=-1)
+        return probs, weights / weights.sum(dim=-1, keepdim=True), chosen
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         shape = x.shape
         flat = x.reshape(-1, shape[-1])
-        probs = F.softmax(self.router(flat).float(), dim=-1)
-        weights, chosen = probs.topk(self.top_k, dim=-1)
-        weights = (weights / weights.sum(dim=-1, keepdim=True)).to(flat.dtype)
+        probs, weights, chosen = self.route(flat)
         num_experts = len(self.experts)
         load = F.one_hot(chosen, num_experts).float().sum(dim=1).mean(dim=0) / self.top_k
         self.aux_loss = num_experts * (load * probs.mean(dim=0)).sum()
-        out = flat.new_zeros(flat.shape)
+        out = torch.zeros(flat.shape, dtype=torch.float32, device=flat.device)
         for e, expert in enumerate(self.experts):
             token_idx, slot = (chosen == e).nonzero(as_tuple=True)
             if token_idx.numel() == 0:
                 continue
-            y = expert(flat.index_select(0, token_idx)) * weights[token_idx, slot, None]
+            y = expert(flat.index_select(0, token_idx)).float() * weights[token_idx, slot, None]
             out = out.index_add(0, token_idx, y)
-        return out.reshape(shape)
+        return out.to(flat.dtype).reshape(shape)
 
 
 def decoder_layers(model: PreTrainedModel) -> nn.ModuleList:

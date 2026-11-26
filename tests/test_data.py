@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from transformers import PreTrainedTokenizerBase
 
-from chained_transformer.data import encode, render
+from chained_transformer.data import RowGroup, encode, render, sample_row_groups
 from chained_transformer.generate import TokenTexts
 from chained_transformer.model import load_tokenizer
 from chained_transformer.modes import Mode, ModeTracker, segment_labels
@@ -51,3 +51,13 @@ def test_think_close_is_one_special_token(
     tracker = ModeTracker()
     tracker.feed("<|im_start|>assistant\n")
     assert [tracker.feed(texts[i]) for i in ids][-1] == Mode.ANSWER
+
+
+def test_row_group_sampling_is_unique_sorted_and_respects_the_download_cap() -> None:
+    groups = [RowGroup(f"shard-{s}", i, 100, 10) for s in range(5) for i in range(10)]
+    picked = sample_row_groups(groups, 20, seed=0)
+    assert len(picked) == len(set(picked)) == 20
+    assert picked == sorted(picked, key=lambda g: (g.path, g.index))
+    capped = sample_row_groups(groups, 20, seed=0, max_bytes=55)
+    assert len(capped) == 5
+    assert set(capped) <= set(sample_row_groups(groups, 20, seed=0))

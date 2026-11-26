@@ -10,7 +10,7 @@ from datasets import Dataset
 from transformers import Qwen3ForCausalLM
 
 from chained_transformer.model import ARMS
-from chained_transformer.train import IGNORE, main, make_batch
+from chained_transformer.train import IGNORE, main, make_batch, token_losses
 
 ROW = {
     "input_ids": [5, 6, 7, 8, 9, 10, 11],
@@ -29,6 +29,24 @@ def test_make_batch_masks_prompt_and_shifts_labels() -> None:
 def test_make_batch_keeps_one_label_for_separate_models() -> None:
     batch = make_batch(ROW, 6, torch.device("cpu"), 1)
     assert batch.targets.tolist() == [[IGNORE, IGNORE, 8, 9, IGNORE, IGNORE]]
+
+
+def test_make_batch_cuts_long_rows_to_seq_len() -> None:
+    batch = make_batch(ROW, 3, torch.device("cpu"), None)
+    assert batch.input_ids.tolist() == [[5, 6, 7]]
+    assert batch.targets.tolist() == [[IGNORE, 7, 8]]
+    assert batch.mode_ids.tolist() == batch.target_labels.tolist() == [[0, 0, 1]]
+
+
+@pytest.mark.parametrize("chunk", [1, 4, 5, 64])
+def test_token_losses_do_not_depend_on_the_loss_chunk(
+    tiny_model: Qwen3ForCausalLM, chunk: int
+) -> None:
+    row = {k: v * 3 for k, v in ROW.items()}
+    batch = make_batch(row, 16, torch.device("cpu"), None)
+    whole = token_losses(tiny_model, batch, 10_000)
+    assert whole.shape == (16,)
+    assert torch.allclose(token_losses(tiny_model, batch, chunk), whole, atol=1e-6)
 
 
 @pytest.mark.parametrize("arm", ARMS)
