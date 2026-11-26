@@ -163,6 +163,7 @@ def cmd_plan(args: argparse.Namespace) -> None:
         warmup=args.warmup,
         complete_only=not args.all_rows,
         train_extra=shlex.split(args.train_extra),
+        benchmarks=args.benchmarks,
         eval_limit=args.eval_limit,
         eval_max_new_tokens=args.eval_max_new_tokens,
         eval_batch_size=args.eval_batch_size,
@@ -422,6 +423,7 @@ def main(argv: list[str] | None = None) -> None:
     plan.add_argument("--warmup", type=int, default=50)
     plan.add_argument("--all-rows", action="store_true", help="train on incomplete rows too")
     plan.add_argument("--train-extra", default="", help="extra train.py flags, quoted")
+    plan.add_argument("--benchmarks", nargs="+", choices=BENCHMARKS, default=list(BENCHMARKS))
     plan.add_argument("--eval-limit", type=int)
     plan.add_argument("--eval-max-new-tokens", type=int, default=8192)
     plan.add_argument("--eval-batch-size", type=int, default=16)
