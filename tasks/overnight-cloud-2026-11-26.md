@@ -151,6 +151,14 @@ verdict. Checked and fine: the MoE router has no bias, so routing without it is 
 The memory check also refuses to measure while another process holds the GPU (exit 2, as
 `tools.gpu_smoke` does), since that process's memory would count against every arm.
 
+A second, independent read against the pinned sources found one serious bug: `MoEMLP` stored its
+balance loss in the forward that checkpointing reruns during backward, and that kept each
+layer's recomputed activations alive until the next step, about what checkpointing saves. The
+`moe` arm would likely have run out of memory on both cards. Fixed (stored only outside
+backward) and tested. Smaller fixes: a fused-kernel out-of-memory error no longer retries on
+the math kernel, `--only-mode` is refused for arms without per-mode weights, MoE top-k above
+the expert count is refused, and three small device and path fixes. Commit `4fdb4be` lists them.
+
 ## Measured versus estimated
 
 - Measured: nothing on torch. The mix logic (5 tests), the memory check's verdict (3 tests)
