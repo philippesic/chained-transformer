@@ -48,10 +48,10 @@ def _ids(n: int, seed: int) -> torch.Tensor:
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_fused_attention_on_cuda_matches_eager_without_math_fallback(dtype: torch.dtype) -> None:
     eager = _model(device=CUDA)
+    if dtype == torch.bfloat16:
+        eager = eager.bfloat16()
     use_attention(eager, "eager")
     fused = copy.deepcopy(eager)
-    if dtype == torch.bfloat16:
-        fused = fused.bfloat16()
     use_attention(fused, "auto")
     ids = _ids(512, 0).to(CUDA)
     with torch.no_grad():
@@ -61,7 +61,7 @@ def test_fused_attention_on_cuda_matches_eager_without_math_fallback(dtype: torc
     out.loss.backward()
     assert len(FALLBACKS) == before, FALLBACKS[before:]
     tol = 3e-2 if dtype == torch.bfloat16 else 1e-4
-    torch.testing.assert_close(out.logits.float(), want, rtol=tol, atol=tol)
+    torch.testing.assert_close(out.logits, want, rtol=tol, atol=tol)
 
 
 def test_chunked_adamw8bit_on_cuda_tracks_cpu() -> None:
