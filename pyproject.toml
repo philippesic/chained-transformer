@@ -1,0 +1,55 @@
+[project]
+name = "mode-routed-mlp"
+version = "0.0.0"
+requires-python = "==3.11.15"
+dependencies = [
+    "torch==2.14.0",
+    "transformers==5.24.1",
+    "datasets==5.2.0",
+    "torchao==0.18.0",
+    "safetensors==0.8.0",
+    "numpy==2.4.6",
+]
+
+[project.optional-dependencies]
+eval = [
+    "math-verify==0.9.0",
+    "evalplus==0.3.1",
+]
+
+[dependency-groups]
+check = [
+    "ruff==0.17.6",
+    "mypy==2.4.1",
+    "pytest==9.2.0",
+]
+
+[tool.uv]
+package = false
+python-downloads = "never"
+default-groups = ["check"]
+required-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = ["gpu: needs the RTX 5080 and the downloaded base model"]
+addopts = "-m 'not gpu'"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["mode_mlp", "tests", "tools"]
+check_untyped_defs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+ignore_missing_imports = true
