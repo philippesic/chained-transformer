@@ -155,7 +155,20 @@ def convert(
     buffers = {n: b for n, b in base.named_buffers()}
     torch.manual_seed(seed)
     apply_surgery(base, surgery)
-    state = base.state_dict()
+    return _assemble(base, config, buffers)
+
+
+def wrap_trained(
+    model: Qwen3ForCausalLM, surgery: SurgeryConfig, base_model: str | None = None
+) -> ChainedQwen3ForCausalLM:
+    config = chained_config(model.config, surgery, base_model)
+    return _assemble(model, config, {n: b for n, b in model.named_buffers()})
+
+
+def _assemble(
+    model: Qwen3ForCausalLM, config: ChainedQwen3Config, buffers: dict[str, torch.Tensor]
+) -> ChainedQwen3ForCausalLM:
+    state = model.state_dict()
     with torch.device("meta"):
         chained = ChainedQwen3ForCausalLM(config)
     chained.load_state_dict(state, strict=True, assign=True)
@@ -171,9 +184,21 @@ def convert(
     leftover = [n for n, t in [*chained.named_parameters(), *chained.named_buffers()] if t.is_meta]
     if leftover:
         raise RuntimeError(f"tensors left on the meta device after conversion: {leftover[:5]}")
-    chained.generation_config = base.generation_config
-    chained.train(base.training)
+    chained.generation_config = model.generation_config
+    chained.train(model.training)
     return chained
+
+
+def save_trained(
+    model: Qwen3ForCausalLM,
+    surgery: SurgeryConfig | None,
+    path: Path,
+    base_model: str | None = None,
+    tokenizer: PreTrainedTokenizerBase | None = None,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    out = model if surgery is None else wrap_trained(model, surgery, base_model)
+    save_checkpoint(out, path, tokenizer, extra)
 
 
 def convert_from_hub(

@@ -17,9 +17,11 @@ from chained_transformer.checkpoint import (
     mode_slice,
     plan,
     save_checkpoint,
+    save_trained,
     shape_config,
 )
 from chained_transformer.generate import TokenTexts, mode_tracking
+from chained_transformer.model import Arm, build, surgery_for_arm
 from chained_transformer.modes import MODE_NAMES
 from chained_transformer.surgery import LoRALinear, MoEMLP, SurgeryConfig, Variant
 
@@ -148,3 +150,30 @@ def test_recorded_shapes_reproduce_published_parameter_counts(tmp_path: Path) ->
     assert written["model_type"] == "chained_qwen3" and written["hidden_size"] == 1024
     big = shape_config("Qwen/Qwen3-1.7B")
     assert big.hidden_size == 2048 and big.intermediate_size == 6144
+
+
+TRAINED_ARMS: list[Arm] = ["sft", "full", "lora", "moe"]
+
+
+@pytest.mark.parametrize("arm", TRAINED_ARMS)
+def test_trained_arm_saves_and_reloads(
+    tmp_path: Path, tiny_model: Qwen3ForCausalLM, arm: Arm
+) -> None:
+    trained = copy.deepcopy(tiny_model)
+    cfg = SurgeryConfig(lora_rank=4)
+    built = build(trained, arm, cfg)
+    trained.activation_checkpointing_enable({"use_reentrant": False})
+    with torch.no_grad():
+        for p in trained.parameters():
+            p.add_(0.01 * torch.randn_like(p))
+    save_trained(trained, surgery_for_arm(arm, cfg), tmp_path / "ckpt", "tiny")
+    loaded = load_checkpoint(tmp_path / "ckpt", torch.float32)
+    assert (loaded.routing is None) == (built.routing is None)
+    ids = _ids(4, (2, 10), 64)
+    modes = _ids(5, (2, 10), 3)
+    trained.eval()
+    with torch.no_grad():
+        if built.routing is not None and loaded.routing is not None:
+            built.routing.set(modes)
+            loaded.routing.set(modes)
+        assert torch.equal(loaded.model(input_ids=ids).logits, trained(input_ids=ids).logits)
