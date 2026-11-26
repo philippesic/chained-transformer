@@ -50,10 +50,12 @@ time in the order you add them, so you can add all of steps 1 to 4 at once.
 ### 1. Export the models
 
 Exports the chained model and one plain model per mode, all with copies of the base MLP, plus
-64 chat prompts with thinking on. This step runs on the CPU.
+32 chat prompts with thinking on. This step runs on the CPU. 32 rather than the benchmarks'
+usual 64 so that `base` and the chained engine keep every request in their KV cache (see
+"Memory" below).
 
 ```sh
-pueue add -g ct -- env PYTHONPATH=$PWD ~/venvs/vllm/bin/python -m tools.bench_vllm prepare --dir artifacts/demo-swap/same --model qwen --dtype float16 --num-prompts 64
+pueue add -g ct -- env PYTHONPATH=$PWD ~/venvs/vllm/bin/python -m tools.bench_vllm prepare --dir artifacts/demo-swap/same --model qwen --dtype float16 --num-prompts 32
 ```
 
 ### 2. Check float16 on this card
@@ -67,7 +69,7 @@ pueue add -g ct -- env PYTHONPATH=$PWD VLLM_ENABLE_V1_MULTIPROCESSING=0 ~/venvs/
 pueue add -g ct -- uv run --locked --no-sync python -m tools.compare_outputs artifacts/demo-swap/base-fp16.json artifacts/demo-swap/base-fp32.json --window 32 --out artifacts/demo-swap/fp16-vs-fp32.json
 ```
 
-The last job prints one line, for example `61 of 64 prompts agree on the first 32 tokens (12 on
+The last job prints one line, for example `30 of 32 prompts agree on the first 32 tokens (6 on
 every token); 0 and 0 outputs repeat one token from the start`. Greedy float16 and float32
 drift apart over long outputs, so few whole-output matches is normal. Treat float16 as broken
 if its outputs repeat one token where float32's don't, or if fewer than half the prompts agree
@@ -98,7 +100,7 @@ starting guess), so routing changes the tokens. Expect `same as base` to drop fo
 except `base`, and `separate` to disagree with `chained/select` after its first switch.
 
 ```sh
-pueue add -g ct -- env PYTHONPATH=$PWD ~/venvs/vllm/bin/python -m tools.bench_vllm prepare --dir artifacts/demo-swap/perturbed --model qwen --dtype float16 --num-prompts 64 --perturb 0.05
+pueue add -g ct -- env PYTHONPATH=$PWD ~/venvs/vllm/bin/python -m tools.bench_vllm prepare --dir artifacts/demo-swap/perturbed --model qwen --dtype float16 --num-prompts 32 --perturb 0.05
 pueue add -g ct -- env PYTHONPATH=$PWD ~/venvs/vllm/bin/python -m tools.bench_vllm all --dir artifacts/demo-swap/perturbed --max-tokens 1024 --gpu-mem 0.8 --max-model-len 2048 --out artifacts/demo-swap/2080-perturbed.json
 pueue add -g ct -- uv run --locked --no-sync python -m tools.mode_swap_table artifacts/demo-swap/2080-perturbed.json --out artifacts/demo-swap/2080-perturbed.md
 pueue add -g ct -- uv run --locked --no-sync python -m tools.compare_outputs artifacts/demo-swap/perturbed/row_chained_select.json artifacts/demo-swap/perturbed/row_separate_na.json --window 32 --out artifacts/demo-swap/2080-perturbed-chained-vs-separate.json
@@ -114,7 +116,7 @@ folder. No pueue group is set aside for the 5080, so queue these the way you run
 bfloat16 has float32's range, so the float16 check is not needed.
 
 ```sh
-env PYTHONPATH=$PWD ~/venvs/vllm/bin/python -m tools.bench_vllm prepare --dir artifacts/demo-swap/same-bf16 --model qwen --dtype bfloat16 --num-prompts 64
+env PYTHONPATH=$PWD ~/venvs/vllm/bin/python -m tools.bench_vllm prepare --dir artifacts/demo-swap/same-bf16 --model qwen --dtype bfloat16 --num-prompts 32
 env PYTHONPATH=$PWD ~/venvs/vllm/bin/python -m tools.bench_vllm all --dir artifacts/demo-swap/same-bf16 --dtype bfloat16 --max-tokens 1024 --gpu-mem 0.8 --max-model-len 2048 --out artifacts/demo-swap/5080-same.json
 uv run --locked --no-sync python -m tools.mode_swap_table artifacts/demo-swap/5080-same.json --out artifacts/demo-swap/5080-same.md
 uv run --locked --no-sync python -m tools.compare_outputs artifacts/demo-swap/same-bf16/row_chained_triton.json artifacts/demo-swap/same-bf16/row_base_na.json --window 32 --out artifacts/demo-swap/5080-same-triton-vs-base.json
@@ -143,7 +145,7 @@ What a good run looks like, from the code rather than a run:
   to another engine and grows with `switches`. The rest is the harness restarting each request
   every 16 tokens, which recomputes up to one cache block each time; a streaming setup with
   separate models would not pay that, so read the switch column as the cost of separate models.
-- With identical modes, `same as base` should be 64 for `chained/select` (the serving checklist
+- With identical modes, `same as base` should be 32 for `chained/select` (the serving checklist
   warns when it is not). `chained/triton` and `separate` compute in a different order, so a few
   outputs may drift late; the `triton-vs-base` comparison should show nearly all prompts
   agreeing on the first 32 tokens.
@@ -152,8 +154,28 @@ What a good run looks like, from the code rather than a run:
   async scheduling, so their speed understates the plugin.
 - `mixed steps` above 0 shows batches really held several modes at once.
 
-If `switches` is 0, thinking never ended within 1,024 tokens. Rerun step 3 with
-`--max-tokens 2048 --max-model-len 3072`.
+If `switches` is 0, thinking never ended within 1,024 tokens. Rerun steps 1, 3 and 4 in a new
+folder with `--num-prompts 16` and, on `all`, `--max-tokens 2048 --max-model-len 3072`, which
+keeps the cache needed about the same.
+
+## Memory
+
+Memory is part of the comparison, and these figures are estimates from Qwen3-0.6B's shape, not
+measurements. In 16-bit the model stores about 112 KiB of KV cache per token, and its weights
+take about 1.1 GiB, plus about 1 GiB more for the chained model's two extra MLPs. At
+`--gpu-mem 0.8` on the 2080 Ti, after weights and about 1 GiB of vLLM's own overhead:
+
+- `base` has room for roughly 60,000 tokens and the chained engine for roughly 50,000. 32
+  requests of about 1,060 tokens need about 34,000, so neither should need to preempt. With
+  64 they would need about 68,000 and both would preempt near the end; vLLM then recomputes,
+  which slows them without showing in the prefill column.
+- Each `separate` engine gets a third of the budget and has room for roughly 8,000 tokens, about
+  seven full-length requests at a time. Its smaller batches are part of the price of keeping
+  three models resident, so its `tok/s` mixes that with re-prefill. `prefill after a switch` is
+  the column that isolates re-prefill.
+
+The 5080's 16 GB gives every engine more room, most of all the separate ones. The same 32
+prompts keep the two cards' results comparable.
 
 ## What to paste back
 
