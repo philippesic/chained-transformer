@@ -59,9 +59,9 @@ def shape_config(shape: ModelShape) -> Any:
         num_key_value_heads=shape.kv_heads,
         head_dim=shape.head_dim,
         max_position_embeddings=40960,
-        rope_theta=1_000_000.0,
+        rope_parameters={"rope_type": "default", "rope_theta": 1_000_000.0},
         tie_word_embeddings=shape.tied,
-        torch_dtype="bfloat16",
+        dtype="bfloat16",
     )
 
 
@@ -70,7 +70,7 @@ def save_random_model(shape: ModelShape, path: Path) -> None:
     from transformers import Qwen3ForCausalLM
 
     torch.manual_seed(0)
-    model = Qwen3ForCausalLM(shape_config(shape)).to(torch.bfloat16)
+    model = Qwen3ForCausalLM(shape_config(shape)).bfloat16()
     model.save_pretrained(path)
 
 
