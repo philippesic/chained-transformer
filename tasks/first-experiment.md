@@ -114,6 +114,21 @@ Overnight thread 2026-11-27 (CPU only, nothing pushed; branches sit on `cloud/mo
   28: 0.899; segment label within 0.01. Use `--max-tokens 8192`; the 4,096 default keeps 12
   rows and no code positions.
 
+2026-11-27 10:52: `sft-s0` trained (1,000 steps, checkpoint saved), but its first eval ran out of
+GPU memory 15 minutes in, inside `fused_sdpa`'s fp32 copies of the key and value cache, after
+4 MATH500 answers (all finished, all closed thinking). The auto batch (7 rows) budgets the KV
+cache but not those per-layer fp32 copies. While Philip decides the eval settings, `full-s0` is
+training via `pilot train-one` (pueue `ct` task 1695, jobwatch `ct-pilot-train-full-s0`), so
+no GPU time is spent on an eval path that may change. Restart with the usual `pilot run`
+command once the eval settings are in the plan.
+
+GPU decode bench, 2080 Ti, base model, bf16 (`artifacts/bench/2080-fit.json`): ms per decode
+step, current `auto`+`dynamic` against `lean`+`roomy`: 7x1024 55.8 vs 37.5, 7x4096 130.9 vs
+61.5 (2.1x), 16x2048 144.3 vs 66.3 (2.2x); `same_argmax_rate` 0.994 to 0.995 (bf16 rounding,
+max logit difference 0.6 to 0.7). At 7x8192 both paths ran out of memory in the bench's
+single-pass prefill; the eval prefills in 512-token chunks. A fixed `--eval-batch-size 5`
+leaves about 2 GB of headroom even for `full` and `moe`.
+
 Open pilot decisions for Philip (record his answers here with the date):
 
 1. Speed branch: pause at the end of `sft-s0` training with the pilot's own GPU-busy stop (a
