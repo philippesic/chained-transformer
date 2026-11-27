@@ -95,6 +95,29 @@ Pilot `pilot-0p6b-8k` (pueue `ct` task 1691, started 2026-11-26 about 21:00 loca
 - Progress: `uv run --locked --no-sync python -m tools.pilot status --root
   artifacts/pilot/pilot-0p6b-8k`.
 
+Overnight thread 2026-11-27 (CPU only, nothing pushed; branches sit on `cloud/moe-fix`):
+
+- `overnight/speed-on-moe-fix` (d06f389): `cloud/moe-fix` at 76cb559 plus `tools/loss_vs_base.py`,
+  the eval speed work (`--attention lean`, length-grouped refill, preallocated cache) and three
+  result pages (`results/sft-loss-vs-base`, `results/first-eval-rehearsal`,
+  `results/eval-decode-cost`). Forecast about 28 h per arm eval on the current path, about 9 h
+  with the branch; the GPU slope is from two points only.
+- Commit 47c227e (on top of that branch): LiveCodeBench window of 341 problems (release_v6
+  through April 2025), continue odds 71% at a true 2-point gap instead of 59.5%.
+- Findings: sft-s0 is 0.157 nats per token below base on fresh rows by the end of pass 1
+  (two thirds of it within 20 steps); all four verdict arms rehearsed end to end on CPU;
+  about 30% of base MATH500 answers hit the 8,192 cap and hold most decode tokens.
+
+Open pilot decisions for Philip (record his answers here with the date):
+
+1. Speed branch: pause at the end of `sft-s0` training with the pilot's own GPU-busy stop (a
+   small CUDA holder, never killing the driver), run `tools.decode_bench` (about 4 minutes),
+   and adopt only if `lean`+`roomy` is at least 1.5 times faster than `auto`+`dynamic` at
+   7x4096 and 7x8192 with `same_argmax_rate` at least 0.99. All arms must share the choice, so
+   it must happen before `full-s0`'s eval. Without a yes, read the eval's tokens per second
+   one hour in (about 11:35) and report.
+2. LiveCodeBench window: keep 166 problems or take 47c227e's 341 before more evals run.
+
 Open decisions (proposals, not yet agreed):
 
 1. **Training data.** Proposal: train on complete rows only, and decide whether to rebalance
