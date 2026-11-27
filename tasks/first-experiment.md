@@ -129,15 +129,13 @@ max logit difference 0.6 to 0.7). At 7x8192 both paths ran out of memory in the 
 single-pass prefill; the eval prefills in 512-token chunks. A fixed `--eval-batch-size 5`
 leaves about 2 GB of headroom even for `full` and `moe`.
 
-Open pilot decisions for Philip (record his answers here with the date):
-
-1. Speed branch: pause at the end of `sft-s0` training with the pilot's own GPU-busy stop (a
-   small CUDA holder, never killing the driver), run `tools.decode_bench` (about 4 minutes),
-   and adopt only if `lean`+`roomy` is at least 1.5 times faster than `auto`+`dynamic` at
-   7x4096 and 7x8192 with `same_argmax_rate` at least 0.99. All arms must share the choice, so
-   it must happen before `full-s0`'s eval. Without a yes, read the eval's tokens per second
-   one hour in (about 11:35) and report.
-2. LiveCodeBench window: keep 166 problems or take 47c227e's 341 before more evals run.
+Decided 2026-11-27 (Philip): every eval uses `--attention lean` with `--eval-batch-size 5`, and
+LiveCodeBench widens to 341 problems (commit 23f3466). Merged `overnight/speed-on-moe-fix`
+(2a67840), then `plan --replace` with those flags; the training arguments are unchanged and
+MATH500's verdict sample became 383. `sft-s0`'s 4 answers from the failed path were moved to
+`sft-s0/eval-auto-oom-20261127` (delete once the report is written). The pilot restarts after
+`full-s0` training as pueue `ct` task 1696 (jobwatch `ct-pilot-0p6b-8k-lean`), with
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` to reduce fragmentation.
 
 Open decisions (proposals, not yet agreed):
 
