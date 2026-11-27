@@ -158,7 +158,8 @@ def resume_mismatch(
     previous: dict[str, Any], model: Any, generation: dict[str, Any], weights: str | None = None
 ) -> list[str]:
     def comparable(settings: dict[str, Any] | None) -> dict[str, Any]:
-        return {k: v for k, v in (settings or {}).items() if k not in RESUME_IGNORES}
+        filled = {**asdict(GenSettings()), **(settings or {})}
+        return {k: v for k, v in filled.items() if k not in RESUME_IGNORES}
 
     problems = []
     if previous.get("model") != model:
@@ -195,6 +196,7 @@ def mode_stats(generations: Sequence[Generation], thinking: bool = True) -> dict
         },
         "mean_switches": _mean([g.switches for g in generations]),
         "finished_rate": round(sum(g.finished for g in generations) / n, 4),
+        "loop_stop_rate": round(sum(g.stopped == "loop" for g in generations) / n, 4),
         "think_closed_rate": round(sum(closed) / n, 4),
         "mean_reprefilled_tokens": _mean([g.reprefilled_tokens for g in generations]),
     }
@@ -349,6 +351,11 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--no-refill", action="store_true", help="plain static batches")
     parser.add_argument(
+        "--stop-loops",
+        action="store_true",
+        help="end a response once its last 768 tokens repeat exactly with a period of at most 256",
+    )
+    parser.add_argument(
         "--attention",
         choices=ATTENTION_CHOICES,
         default="auto",
@@ -372,6 +379,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
+    if args.stop_loops and (args.no_refill or args.separate):
+        parser.error("--stop-loops needs the refill decoder: not with --no-refill or --separate")
     if args.device.startswith("cuda"):
         configure_allocator()
     dtype = (
@@ -389,6 +398,7 @@ def main(argv: list[str] | None = None) -> None:
         seed=args.seed,
         enable_thinking=not args.no_thinking,
         refill=not args.no_refill,
+        stop_loops=args.stop_loops,
     )
     sources = parse_sources(args.source)
     sample = parse_sample(args.sample, args.benchmarks)
