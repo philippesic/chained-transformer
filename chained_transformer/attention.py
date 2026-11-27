@@ -9,7 +9,8 @@ from torch import nn
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
 NAME = "ct_fused_sdpa"
-ATTENTION_CHOICES = ("auto", "sdpa", "eager")
+LEAN = "ct_lean_sdpa"
+ATTENTION_CHOICES = ("auto", "lean", "sdpa", "eager")
 FUSED_BACKENDS = [
     SDPBackend.FLASH_ATTENTION,
     SDPBackend.EFFICIENT_ATTENTION,
@@ -82,22 +83,64 @@ def fused_sdpa(
     return out.to(dtype).transpose(1, 2).contiguous(), None
 
 
+def decode_step(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask: torch.Tensor | None,
+    scaling: float | None,
+) -> torch.Tensor:
+    batch, heads, _, dim = query.shape
+    groups = key.shape[1]
+    q = query.float().view(batch, groups, heads // groups, dim)
+    scores = torch.matmul(q, key.float().transpose(-1, -2))
+    scores = scores * (dim**-0.5 if scaling is None else scaling)
+    if attention_mask is not None:
+        if attention_mask.dtype == torch.bool:
+            scores = scores.masked_fill(~attention_mask, float("-inf"))
+        else:
+            scores = scores + attention_mask.float()
+    out = torch.matmul(torch.softmax(scores, dim=-1), value.float())
+    return out.view(batch, heads, 1, dim)
+
+
+def lean_sdpa(
+    module: nn.Module,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask: torch.Tensor | None,
+    dropout: float = 0.0,
+    scaling: float | None = None,
+    is_causal: bool | None = None,
+    **kwargs: Any,
+) -> tuple[torch.Tensor, None]:
+    if query.shape[2] != 1 or module.training:
+        return fused_sdpa(
+            module, query, key, value, attention_mask, dropout, scaling, is_causal, **kwargs
+        )
+    out = decode_step(query, key, value, attention_mask, scaling)
+    return out.to(query.dtype).transpose(1, 2).contiguous(), None
+
+
 def register() -> None:
     from transformers import AttentionInterface
 
     AttentionInterface.register(NAME, fused_sdpa)
+    AttentionInterface.register(LEAN, lean_sdpa)
     try:
         from transformers.masking_utils import AttentionMaskInterface, sdpa_mask
     except ImportError:
         return
     AttentionMaskInterface.register(NAME, sdpa_mask)
+    AttentionMaskInterface.register(LEAN, sdpa_mask)
 
 
 def use_attention(model: nn.Module, choice: str) -> None:
     if choice not in ATTENTION_CHOICES:
         raise ValueError(f"attention must be one of {ATTENTION_CHOICES}, got {choice!r}")
-    name = {"auto": NAME, "sdpa": "sdpa", "eager": "eager"}[choice]
-    if name == NAME:
+    name = {"auto": NAME, "lean": LEAN, "sdpa": "sdpa", "eager": "eager"}[choice]
+    if name in (NAME, LEAN):
         register()
     setter = getattr(model, "set_attn_implementation", None)
     if callable(setter):

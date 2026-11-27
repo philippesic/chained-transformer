@@ -352,7 +352,8 @@ def main(argv: list[str] | None = None) -> None:
         "--attention",
         choices=ATTENTION_CHOICES,
         default="auto",
-        help="auto: fused kernels, in fp32 for bf16 on GPUs older than sm80",
+        help="auto: fused kernels, in fp32 for bf16 on GPUs older than sm80; lean: the same, "
+        "but one-token decode steps read the cache without copying it",
     )
     parser.add_argument("--source", nargs="*", default=[], help="benchmark=source, e.g. math500=hf")
     parser.add_argument("--tokenizer")
