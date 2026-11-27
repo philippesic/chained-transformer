@@ -103,9 +103,10 @@ pueue add -g ct -- uv run --locked --no-sync python -m evals.run --model <checkp
 - LiveCodeBench: mirrors `lcb_runner` at commit `28fef95` (2025-07-15): the `CodeQwenInstruct`
   prompt (the style lcb_runner assigns to Qwen3), last fenced block after thinking, the official
   stdin and functional grading with a 6 s per-test alarm, first-failure stop, and the official
-  overall budget. Default problems: `release_v5`, contest dates 2024-10-01 to 2025-02-01, the
-  window of the Qwen3 technical report. Private tests are decoded with a restricted unpickler
-  that refuses every global.
+  overall budget. Default problems: `release_v6`, contest dates 2024-10-01 to 2025-05-01, 341
+  problems. The 166 before 2025-02-01 are the window of the Qwen3 technical report (`release_v5`),
+  too few on their own for the kill rule's sample. Private tests are decoded with a restricted
+  unpickler that refuses every global.
 - Leakage: the existing think-word list ("wait", "hmm", "let me", "alternatively", "actually",
   "double-check", "I think"), per 1,000 answer words, over responses whose thinking closed; plus
   the share of answers with any think word, the same rate inside thinking for contrast, and code
@@ -134,7 +135,7 @@ pueue add -g ct -- uv run --locked --no-sync python -m evals.run --model <checkp
   media.githubusercontent.com, which is also blocked. A six-problem local file scored 6/6.
 - LiveCodeBench: the `release_vN` to file mapping (vN = `test.jsonl` … `testN.jsonl`) comes from
   the dataset's loader script on the Hub, which could not be read. The report records the
-  README's count for the release next to the count loaded; v5 should give 880.
+  README's count for the release next to the count loaded; v6 gives 1,055 (checked 2026-11-27).
 
 - The pilot evaluates each arm as soon as its training runs are done (`commands.sh` and `run`
   use that order), so an eval problem shows up after the first arm, and uses `--batch-size auto`
@@ -166,7 +167,7 @@ pueue add -g ct -- uv run --locked --no-sync python -m evals.run --model <checkp
   `pilot plan --kill-rule seed-mean` applies it; `every-seed`, the rule as written, is the default.
 - The pilot defaults to the verdict eval set: `sft`, `full`, `lora` and `moe` on a per-benchmark
   sample sized by `tools/eval_power.py` for a 2-point gap at two seeds, assuming the arms
-  disagree on 10% of problems (361 MATH500, all 164 HumanEval+, 361 LiveCodeBench). After each
+  disagree on 10% of problems (383 MATH500, all 164 HumanEval+, all 341 LiveCodeBench). After each
   eval, `pilot run` measures how often `full` and `sft`/`moe` disagree on shared problems (once
   100 are shared) and grows the sample if needed, never shrinking it; earlier evals resume to
   match. HumanEval+ has only 164 problems, so under the macro mean of three benchmarks the

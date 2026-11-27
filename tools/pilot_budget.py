@@ -25,7 +25,7 @@ from tools.pilot import (
 )
 
 PHASES = ("forward", "backward", "optimizer")
-PROBLEMS = {"math500": 500, "humanevalplus": 164, "livecodebench": 880}
+PROBLEMS = {"math500": 500, "humanevalplus": 164, "livecodebench": 341}
 RUNS_PER_SEED = {"sft": 1, "full": 1, "lora": 1, "moe": 1, "separate": 3}
 PROMPT_TOKENS = 600
 OVERHEAD_GIB = 1.5

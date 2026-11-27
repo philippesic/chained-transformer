@@ -82,8 +82,8 @@ PAIR = _row(
     "pair",
 )
 OLD = _row("abc300_a", "2023-06-01T00:00:00", _stdin_tests([("1\n", "1\n")]), "[]")
-AT_END = _row("abc392_a", "2025-02-01T00:00:00", _stdin_tests([("1\n", "1\n")]), "[]")
-LATER = _row("abc400_a", "2025-03-01T00:00:00", _stdin_tests([("1\n", "1\n")]), "[]")
+AT_END = _row("abc392_a", "2025-05-01T00:00:00", _stdin_tests([("1\n", "1\n")]), "[]")
+LATER = _row("abc400_a", "2025-06-01T00:00:00", _stdin_tests([("1\n", "1\n")]), "[]")
 
 FILES: dict[str, list[dict[str, Any]]] = {
     "test.jsonl": [OLD],
@@ -134,15 +134,16 @@ def _answer(code: str) -> str:
 def test_benchmark_object_matches_protocol() -> None:
     bench: Benchmark = lcb.BENCHMARK
     assert bench.name == "livecodebench"
-    assert lcb.BENCHMARK.release == "release_v5"
-    assert (lcb.BENCHMARK.start_date, lcb.BENCHMARK.end_date) == ("2024-10-01", "2025-02-01")
+    assert lcb.BENCHMARK.release == "release_v6"
+    assert (lcb.BENCHMARK.start_date, lcb.BENCHMARK.end_date) == ("2024-10-01", "2025-05-01")
     assert lcb.BENCHMARK.timeout_s == 6
-    assert lcb.RELEASE_FILES["release_v5"] == (
+    assert lcb.RELEASE_FILES["release_v6"] == (
         "test.jsonl",
         "test2.jsonl",
         "test3.jsonl",
         "test4.jsonl",
         "test5.jsonl",
+        "test6.jsonl",
     )
 
 
@@ -161,15 +162,15 @@ def test_load_limit_takes_ordered_prefix(bench: lcb.LiveCodeBench, data_dir: Pat
 
 def test_source_metadata(loaded: Loaded, data_dir: Path) -> None:
     source = loaded.source
-    assert source["release"] == "release_v5"
-    assert source["window"]["start"] == "2024-10-01" and source["window"]["end"] == "2025-02-01"
+    assert source["release"] == "release_v6"
+    assert source["window"]["start"] == "2024-10-01" and source["window"]["end"] == "2025-05-01"
     assert source["window"]["start_inclusive"] and not source["window"]["end_inclusive"]
     names = [f["name"] for f in source["files"]]
-    assert names == ["test.jsonl", "test2.jsonl", "test3.jsonl", "test4.jsonl", "test5.jsonl"]
+    assert names == [f"test{n}.jsonl" for n in ("", 2, 3, 4, 5, 6)]
     for info in source["files"]:
         expected = hashlib.sha256((data_dir / info["name"]).read_bytes()).hexdigest()
         assert info["sha256"] == expected
-    assert source["problems_in_release"] == 6
+    assert source["problems_in_release"] == 7
     assert source["problems_in_window"] == 4
     assert source["prompt_style"] == "CodeQwenInstruct"
     assert source["lcb_runner_commit"] == lcb.LCB_COMMIT

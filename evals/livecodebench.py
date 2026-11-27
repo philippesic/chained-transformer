@@ -40,9 +40,9 @@ RELEASE_SIZES = {
     "release_v5": 880,
     "release_v6": 1055,
 }
-RELEASE = "release_v5"
+RELEASE = "release_v6"
 START_DATE = "2024-10-01"
-END_DATE = "2025-02-01"
+END_DATE = "2025-05-01"
 DATE_FORMAT = "%Y-%m-%d"
 TIMEOUT_S = 6
 MEMORY_MB = 4096

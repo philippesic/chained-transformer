@@ -43,7 +43,8 @@ def data(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     lcb.mkdir()
     for i, name in enumerate(["test.jsonl", "test2.jsonl", "test3.jsonl", "test4.jsonl"]):
         (lcb / name).write_text(json.dumps(_lcb_row(f"abc{i}")) + "\n")
-    (lcb / "test5.jsonl").write_text("")
+    for name in ("test5.jsonl", "test6.jsonl"):
+        (lcb / name).write_text("")
     return {"math": math, "lcb": lcb}
 
 

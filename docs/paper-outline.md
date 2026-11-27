@@ -59,8 +59,8 @@ Evidence against, which the paper has to answer head-on:
 1. **Main comparison** (`tools/pilot.py`). Qwen3-0.6B, five arms (`sft`, `full`, `lora`, `moe`,
    `separate`), seeds 0 and 1, the same rows in the same order, equal steps and sequence length.
    Data: complete OpenThoughts3 rows under the chosen mix policy. Evals: MATH500 (answer segment,
-   math-verify), HumanEval+ (evalplus 0.3.1), LiveCodeBench `release_v5` with contest dates
-   2024-10-01 to 2025-02-01, greedy for every arm because `separate` decodes greedily. The pilot's
+   math-verify), HumanEval+ (evalplus 0.3.1), LiveCodeBench `release_v6` with contest dates
+   2024-10-01 to 2025-05-01, greedy for every arm because `separate` decodes greedily. The pilot's
    verdict runs on a sample sized for a 2-point gap (`tools/eval_power.py`); paper numbers come
    from `pilot widen`, which completes the full suite and adds `separate`.
 2. **Single-mode upgrade** (`chained_transformer.upgrade`). Retrain `code` on a code-heavy slice
@@ -104,8 +104,9 @@ rate by switches for Figure 3 and the kill-rule verdict, and writes `results.md`
 1. **Benchmarks and scoring.** MATH500 scores only the answer after `</think>` with math-verify
    (the lenient score over the whole response is a leakage diagnostic, not a result);
    HumanEval+ with evalplus 0.3.1, plus as the primary and base alongside; LiveCodeBench
-   `release_v5`, contest dates 2024-10-01 to 2025-02-01 (880 problems), stdin and functional tests
-   in a sandbox. The primary metric is mean accuracy over the three, in points. HumanEval+ grades
+   `release_v6`, contest dates 2024-10-01 to 2025-05-01 (341 problems; the 166 before 2025-02-01
+   are the Qwen3 technical report's window and can be reported beside it), stdin and functional
+   tests in a sandbox. The primary metric is mean accuracy over the three, in points. HumanEval+ grades
    code inside unfinished thinking and the other two do not, so give each arm's unclosed-think rate
    beside its scores.
 2. **Decoding.** Greedy for every arm, the same chat template with thinking on, at most the
@@ -113,7 +114,7 @@ rate by switches for Figure 3 and the kill-rule verdict, and writes `results.md`
    (tests); bf16 on the GPU can differ by batch, so say which batch each arm ran at.
 3. **Verdict sample, then the full suite.** The kill rule was judged on a fixed hash-ranked
    sample sized for a per-seed standard error of 1.14 points at an assumed discordance of 0.10
-   (361 / 164 / 361 problems), grown when the first arms disagreed more. The tables use the full
+   (383 / 164 / 341 problems), grown when the first arms disagreed more. The tables use the full
    suite after `pilot widen`. Report both, and that the verdict came before widening.
 4. **The rule and its odds.** State the rule exactly as fixed, then its operating
    characteristics from `python -m tools.eval_power --odds`: requiring both margins to clear

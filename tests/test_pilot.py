@@ -180,16 +180,16 @@ def test_verdict_plan_samples_the_suite_and_leaves_out_separate(tmp_path: Path) 
         f"{a}-s{s}" for s in (0, 1) for a in ("sft", "full", "lora", "moe")
     ]
     assert plan["config"]["eval_sample"] == {
-        "math500": 361,
+        "math500": 383,
         "humanevalplus": 164,
-        "livecodebench": 361,
+        "livecodebench": 341,
     }
     argv = plan["eval"][0]["argv"]
     assert "--resume" in argv and argv[argv.index("--max-new-tokens") + 1] == "2048"
     assert argv[argv.index("--sample") + 1 :][:3] == [
-        "math500=361",
+        "math500=383",
         "humanevalplus=164",
-        "livecodebench=361",
+        "livecodebench=341",
     ]
 
 
@@ -213,10 +213,10 @@ def test_resize_grows_the_sample_when_arms_disagree_and_never_shrinks(tmp_path: 
     assert pilot.resize(root) is None
     _scores(root, "full-s0", "math500", split)
     grown = pilot.resize(root)
-    assert grown is not None and grown["math500"] == 500 and grown["livecodebench"] > 361
+    assert grown is not None and grown["math500"] == 500 and grown["livecodebench"] == 341
     plan = json.loads((root / "plan.json").read_text())
     assert plan["config"]["eval_sample"] == grown and len(plan["sizing"]) == 1
-    assert plan["sizing"][0]["from"]["math500"] == 361
+    assert plan["sizing"][0]["from"]["math500"] == 383
     _scores(root, "full-s0", "math500", agree)
     assert pilot.resize(root) is None
     assert pilot.load_plan(root)[0].eval_sample == grown
@@ -251,7 +251,7 @@ def test_run_reevaluates_earlier_arms_after_the_sample_grows(
     assert pilot.load_plan(root)[0].eval_sample == {
         "math500": 500,
         "humanevalplus": 164,
-        "livecodebench": 880,
+        "livecodebench": 341,
     }
 
 
@@ -274,7 +274,7 @@ def test_compare_reports_the_verdict_sample_power(tmp_path: Path) -> None:
     _report(root, "full-s0", 0.5, 0.5)
     pilot.main(["compare", "--root", str(root)])
     sample = json.loads((root / "compare.json").read_text())["verdict_sample"]
-    assert sample["problems"]["math500"] == 361 and sample["observed"] is False
+    assert sample["problems"]["math500"] == 383 and sample["observed"] is False
     assert 0.79 < sample["power_for_a_2_point_gap"] < 0.85
 
 

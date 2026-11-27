@@ -209,8 +209,8 @@ Checkpoint saving is not implemented yet.
 `python -m evals.run` loads a mode checkpoint, a plain checkpoint, a Hub name or (for `separate`)
 three plain fine-tunes, generates through the mode hook or the separate-models loop, and scores
 MATH500 (math-verify on the answer segment), HumanEval+ (evalplus) and LiveCodeBench (a
-re-implementation of `lcb_runner`'s grading in a subprocess sandbox, `release_v5`, contest dates
-2024-10-01 to 2025-02-01). Every response is split into think, code and answer text by the same
+re-implementation of `lcb_runner`'s grading in a subprocess sandbox, `release_v6`, contest dates
+2024-10-01 to 2025-05-01). Every response is split into think, code and answer text by the same
 `ModeTracker`, which also drives the thinking-leakage metrics. Each run writes `report.json`
 (model, generation settings, git commit, data sources with hashes, scores, leakage, tokens by
 segment label, switches, tokens/s, peak memory) and per-benchmark `responses.jsonl` and

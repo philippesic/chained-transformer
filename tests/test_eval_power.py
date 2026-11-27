@@ -18,7 +18,7 @@ def test_target_se_gives_the_planned_power() -> None:
     ("d", "sizes"),
     [
         (0.05, {"math500": 129, "humanevalplus": 129, "livecodebench": 129}),
-        (0.10, {"math500": 361, "humanevalplus": 164, "livecodebench": 361}),
+        (0.10, {"math500": 383, "humanevalplus": 164, "livecodebench": 341}),
         (0.30, FULL_SIZES),
         (0.001, {"math500": 100, "humanevalplus": 100, "livecodebench": 100}),
     ],
@@ -48,8 +48,8 @@ def test_discordance_counts_shared_problems_only() -> None:
 def test_main_prints_the_table(capsys: pytest.CaptureFixture[str]) -> None:
     eval_power.main(["--discordance", "0.1", "0.2"])
     out = capsys.readouterr().out
-    assert "| 0.10 | 361 / 164 / 361 | 57% | 1.01 | 87% |" in out
-    assert "| 0.20 | not reachable | 100% | 1.43 | 63% |" in out
+    assert "| 0.10 | 383 / 164 / 341 | 88% | 1.11 | 82% |" in out
+    assert "| 0.20 | not reachable | 100% | 1.57 | 56% |" in out
 
 
 @pytest.mark.parametrize("rho", [0.0, 0.3, 0.5, 0.9])

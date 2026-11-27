@@ -5,7 +5,7 @@ import math
 from collections.abc import Mapping
 from statistics import NormalDist
 
-FULL_SIZES = {"math500": 500, "humanevalplus": 164, "livecodebench": 880}
+FULL_SIZES = {"math500": 500, "humanevalplus": 164, "livecodebench": 341}
 GAP_POINTS = 2.0
 ALPHA = 0.05
 POWER = 0.8
