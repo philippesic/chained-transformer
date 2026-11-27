@@ -108,6 +108,12 @@ Overnight thread 2026-11-27 (CPU only, nothing pushed; branches sit on `cloud/mo
   (two thirds of it within 20 steps); all four verdict arms rehearsed end to end on CPU;
   about 30% of base MATH500 answers hit the 8,192 cap and hold most decode tokens.
 
+- Mode probe (runbook step 8, CPU, 55 full-length rows of `ot3-mix-8k`, 3 classes, 33%
+  baseline; `results/mode-probe/result.md` on the overnight branch): held-out balanced accuracy
+  for position mode by layer: 0: 0.545, 1: 0.728, 2: 0.800, 4: 0.862, 12: 0.895, 20: 0.908,
+  28: 0.899; segment label within 0.01. Use `--max-tokens 8192`; the 4,096 default keeps 12
+  rows and no code positions.
+
 Open pilot decisions for Philip (record his answers here with the date):
 
 1. Speed branch: pause at the end of `sft-s0` training with the pilot's own GPU-busy stop (a
