@@ -28,7 +28,7 @@ SPAWN_SLEEPER = (
 def _alive(pid: int) -> bool:
     try:
         stat = Path(f"/proc/{pid}/stat").read_text()
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
         return False
     return stat.rsplit(")", 1)[1].split()[0] != "Z"
 
