@@ -1,0 +1,135 @@
+{
+  "base_model_math500_current_vs_branch": {
+    "answers": 3,
+    "identical_text": 3,
+    "new_tokens": [
+      657,
+      1050,
+      1057
+    ],
+    "current": "auto attention, fixed-batch refill, DynamicCache (overnight/eval-rehearsal 82f9549)",
+    "branch": "lean attention, grouped refill, preallocated cache (overnight/eval-speed)"
+  },
+  "full_s0_rehearsal_checkpoint_current_vs_branch": {
+    "math500": {
+      "answers": 6,
+      "identical_text": 6,
+      "identical_mode_runs": 6,
+      "new_tokens": 4608
+    },
+    "humanevalplus": {
+      "answers": 6,
+      "identical_text": 6,
+      "identical_mode_runs": 6,
+      "new_tokens": 4608
+    },
+    "livecodebench": {
+      "answers": 6,
+      "identical_text": 6,
+      "identical_mode_runs": 6,
+      "new_tokens": 4608
+    }
+  },
+  "grouped_refill_vs_one_at_a_time": {
+    "model": "Qwen/Qwen3-0.6B",
+    "problems": "7 math500 + 5 livecodebench",
+    "max_new_tokens": 300,
+    "step": 2,
+    "rows": 6,
+    "capacity_tokens": 2142,
+    "max_rows_times_width": 2142,
+    "max_rows_in_a_call": 6,
+    "calls": 9,
+    "answers": 12,
+    "identical_text_and_mode_runs": 12,
+    "calls_rows_widthin_widthout_maxnew": [
+      [
+        6,
+        93,
+        357,
+        264
+      ],
+      [
+        5,
+        353,
+        389,
+        36
+      ],
+      [
+        2,
+        594,
+        630,
+        300
+      ],
+      [
+        2,
+        633,
+        897,
+        300
+      ],
+      [
+        1,
+        897,
+        933,
+        36
+      ],
+      [
+        1,
+        771,
+        1071,
+        300
+      ],
+      [
+        1,
+        582,
+        882,
+        300
+      ],
+      [
+        1,
+        351,
+        651,
+        300
+      ],
+      [
+        1,
+        62,
+        362,
+        300
+      ]
+    ]
+  },
+  "gpu_timings_read_from_existing_logs": {
+    "gpu_equivalence_batch1_tokens_per_s": [
+      23.0,
+      27.6,
+      27.4,
+      27.1,
+      28.4,
+      26.1
+    ],
+    "real_model_smoke_batch3": {
+      "base": {
+        "math500": [
+          2048,
+          120.43
+        ],
+        "humanevalplus": [
+          2048,
+          88.9
+        ]
+      },
+      "full": {
+        "math500": [
+          2048,
+          99.01
+        ],
+        "humanevalplus": [
+          2048,
+          92.89
+        ]
+      },
+      "note": "steps, seconds"
+    }
+  }
+}
