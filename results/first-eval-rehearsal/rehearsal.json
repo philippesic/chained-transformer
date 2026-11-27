@@ -1,0 +1,132 @@
+{
+  "plan": {
+    "name": "rehearsal",
+    "data": "/home/philip/chained-transformer/artifacts/data/ot3-natural-8k",
+    "base": "Qwen/Qwen3-0.6B",
+    "seeds": [
+      0
+    ],
+    "steps": 2,
+    "seq_len": 1024,
+    "grad_accum": 2,
+    "warmup": 1,
+    "lr": {
+      "sft": 1e-05,
+      "full": 1e-05,
+      "lora": 0.0001,
+      "moe": 1e-05,
+      "separate": 1e-05
+    },
+    "complete_only": true,
+    "lora_rank": 64,
+    "moe_top_k": 2,
+    "train_extra": [],
+    "benchmarks": [
+      "math500",
+      "humanevalplus",
+      "livecodebench"
+    ],
+    "eval_limit": 6,
+    "eval_max_new_tokens": 768,
+    "eval_set": "verdict",
+    "eval_sample": {
+      "math500": 361,
+      "humanevalplus": 164,
+      "livecodebench": 361
+    },
+    "eval_batch_size": 3,
+    "eval_extra": [],
+    "device": "cpu",
+    "kill_rule": "seed-mean"
+  },
+  "runs": {
+    "sft-s0": {
+      "train": "done",
+      "eval": "done",
+      "eval_code": {
+        "commit": "2a66137ed52cfb541543bedda8f35b945a798870",
+        "dirty": false
+      },
+      "benchmarks": {
+        "math500": {
+          "n": 6,
+          "accuracy": 0.0,
+          "generate_calls": 2,
+          "refill": true,
+          "tokens_per_s_cpu": 11.14,
+          "source_problems_in_window": null
+        },
+        "humanevalplus": {
+          "n": 6,
+          "accuracy": 0.1667,
+          "generate_calls": 2,
+          "refill": true,
+          "tokens_per_s_cpu": 13.9,
+          "source_problems_in_window": null
+        },
+        "livecodebench": {
+          "n": 6,
+          "accuracy": 0.0,
+          "generate_calls": 2,
+          "refill": true,
+          "tokens_per_s_cpu": 6.26,
+          "source_problems_in_window": 166
+        }
+      }
+    },
+    "full-s0": {
+      "train": "done",
+      "eval": "done",
+      "eval_code": {
+        "commit": "31b0bd8889f5c6242ad6075395ed59e2c3d80566",
+        "dirty": true
+      },
+      "benchmarks": {
+        "math500": {
+          "n": 6,
+          "accuracy": 0.0,
+          "generate_calls": 2,
+          "refill": true,
+          "tokens_per_s_cpu": 11.71,
+          "source_problems_in_window": null
+        },
+        "humanevalplus": {
+          "n": 6,
+          "accuracy": 0.1667,
+          "generate_calls": 2,
+          "refill": true,
+          "tokens_per_s_cpu": 14.6,
+          "source_problems_in_window": null
+        },
+        "livecodebench": {
+          "n": 6,
+          "accuracy": 0.0,
+          "generate_calls": 2,
+          "refill": true,
+          "tokens_per_s_cpu": 5.95,
+          "source_problems_in_window": 166
+        }
+      }
+    }
+  },
+  "full_s0_current_path_vs_speed_branch": {
+    "math500": {
+      "answers": 6,
+      "identical_text": 6,
+      "identical_mode_runs": 6,
+      "new_tokens": 4608
+    },
+    "humanevalplus": {
+      "answers": 6,
+      "identical_text": 6,
+      "identical_mode_runs": 6,
+      "new_tokens": 4608
+    },
+    "livecodebench": {
+      "answers": 6,
+      "identical_text": 6,
+      "identical_mode_runs": 6,
+      "new_tokens": 4608
+    }
+  }
+}
