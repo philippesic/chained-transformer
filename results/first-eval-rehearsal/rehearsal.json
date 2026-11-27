@@ -107,6 +107,74 @@
           "source_problems_in_window": 166
         }
       }
+    },
+    "lora-s0": {
+      "train": "done",
+      "eval": "done",
+      "eval_code": {
+        "commit": "21215e995cb2dc2841247f443d6e941c1d84911d",
+        "dirty": false
+      },
+      "benchmarks": {
+        "math500": {
+          "n": 6,
+          "accuracy": 0.0,
+          "generate_calls": 2,
+          "refill": true,
+          "tokens_per_s_cpu": 5.24,
+          "source_problems_in_window": null
+        },
+        "humanevalplus": {
+          "n": 6,
+          "accuracy": 0.0,
+          "generate_calls": 2,
+          "refill": true,
+          "tokens_per_s_cpu": 6.22,
+          "source_problems_in_window": null
+        },
+        "livecodebench": {
+          "n": 6,
+          "accuracy": 0.0,
+          "generate_calls": 2,
+          "refill": true,
+          "tokens_per_s_cpu": 2.94,
+          "source_problems_in_window": 166
+        }
+      }
+    },
+    "moe-s0": {
+      "train": "done",
+      "eval": "done",
+      "eval_code": {
+        "commit": "21215e995cb2dc2841247f443d6e941c1d84911d",
+        "dirty": false
+      },
+      "benchmarks": {
+        "math500": {
+          "n": 6,
+          "accuracy": 0.0,
+          "generate_calls": 2,
+          "refill": true,
+          "tokens_per_s_cpu": 4.42,
+          "source_problems_in_window": null
+        },
+        "humanevalplus": {
+          "n": 6,
+          "accuracy": 0.3333,
+          "generate_calls": 2,
+          "refill": true,
+          "tokens_per_s_cpu": 5.08,
+          "source_problems_in_window": null
+        },
+        "livecodebench": {
+          "n": 6,
+          "accuracy": 0.1667,
+          "generate_calls": 2,
+          "refill": true,
+          "tokens_per_s_cpu": 2.76,
+          "source_problems_in_window": 166
+        }
+      }
     }
   },
   "full_s0_current_path_vs_speed_branch": {
@@ -128,5 +196,46 @@
       "identical_mode_runs": 6,
       "new_tokens": 4608
     }
+  },
+  "compare": {
+    "scores_points": {
+      "sft": {
+        "0": {
+          "math500": 0.0,
+          "humanevalplus": 16.669999999999998,
+          "livecodebench": 0.0
+        }
+      },
+      "full": {
+        "0": {
+          "math500": 0.0,
+          "humanevalplus": 16.669999999999998,
+          "livecodebench": 0.0
+        }
+      },
+      "lora": {
+        "0": {
+          "math500": 0.0,
+          "humanevalplus": 0.0,
+          "livecodebench": 0.0
+        }
+      },
+      "moe": {
+        "0": {
+          "math500": 0.0,
+          "humanevalplus": 33.33,
+          "livecodebench": 16.669999999999998
+        }
+      }
+    },
+    "kill_rule": "kill rule met: a seed mean is below 12.26 points (full - sft 0.00, full - moe -11.11 points)",
+    "rule": "seed-mean: seed mean of each margin at least 12.26 points (one-sided 5% test)",
+    "not_counted": {}
+  },
+  "train_loss_at_last_step": {
+    "sft-s0": 1.6078,
+    "full-s0": 1.6078,
+    "lora-s0": 1.5597,
+    "moe-s0": 1.6084
   }
 }

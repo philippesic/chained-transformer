@@ -11,6 +11,6 @@
   base by the end of pass 1, two thirds of it gained in the first 20 steps; `code` tokens are
   0.39% of the loss and barely move.
 - [First-eval rehearsal on CPU](results/first-eval-rehearsal/result.md) (2026-11-27, CPU only):
-  train, save and eval run end to end for `sft` and `full`; LiveCodeBench's window holds 166
+  train, save and eval run end to end for all four verdict arms; LiveCodeBench's window holds 166
   problems, not the planned 361, so a true 2-point gap continues 59.5% of the time, not 69%; the
   batch refill outgrew its memory budget and is fixed.

@@ -1,7 +1,8 @@
 # First-eval rehearsal on CPU: the path runs, but the eval set and its memory budget were off
 
-**Conclusion.** The pilot's own train, save and eval steps run end to end on the real
-Qwen3-0.6B for `sft` and `full`, LiveCodeBench included, which no earlier check had run. The
+**Conclusion.** The pilot's own steps run end to end on the real Qwen3-0.6B for all four
+verdict arms (`sft`, `full`, `lora`, `moe`): train, save, eval on the three benchmarks, then
+`status`, `compare` and `pilot_report`. LiveCodeBench had not run in any earlier check. The
 rehearsal found two defects before the pilot's first eval and cleared three ways the eval
 could have been silently wrong.
 
@@ -40,18 +41,21 @@ Checks that came back clean:
 **Conditions.** CPU only, in a worktree off `cloud/moe-fix` at 2a66137, while the pilot trained
 on the GPU. Rehearsal plan: `tools.pilot` with seed 0, 2 training steps of 2 rows at 1,024
 tokens, then every benchmark limited to 6 problems, 768 new tokens, batch 3 (so the refill
-path runs), fp32. `sft` was evaluated on the old refill and `full` on the fixed one. The
-`full` checkpoint's 18 answers were also regenerated with the speed branch's decode path and
-are identical in text and mode runs. Evidence: [rehearsal.json](rehearsal.json).
+path runs), fp32. `sft` was evaluated on the old refill and the other three arms on the fixed
+one. The `full` checkpoint's 18 answers were also regenerated with the speed branch's decode
+path and are identical in text and mode runs. Scores at 6 problems and 768 tokens mean
+nothing; the point is that every step ran. Evidence: [rehearsal.json](rehearsal.json).
 
 **Limitations.** Nothing ran on a GPU. The memory claim rests on the width test and on
 arithmetic (at batch 7 and 8,000 tokens the padding mask and its fp32 copy alone take about
 2.5 GiB next to 6.3 GiB of cache on a card with about 9.2 GiB free); no out-of-memory error
-was observed. `lora` and `moe` were not rehearsed. The 10% disagreement between arms is an
-assumption until two arms have been evaluated.
+was observed. Two training steps do not test whether an arm trains well, only that it trains,
+saves and loads. The 10% disagreement between arms is an assumption until two arms have been
+evaluated.
 
 **Disposition.** The refill fix is retained and in the pilot's checkout. Widening LiveCodeBench
 is Philip's decision: branch `overnight/lcb-v6` (47c227e) switches to `release_v6` with 341
 problems and corrects `eval_power.FULL_SIZES`; answers already generated are kept by
 `--resume`. The rehearsal's outputs (`artifacts/pilot/rehearsal` in the overnight worktree,
-3.3 GB, mostly its two checkpoints) are disposable.
+6.6 GB, mostly its four checkpoints) are disposable; the checkpoints were deleted after this
+page was written.
