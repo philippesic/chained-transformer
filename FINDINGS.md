@@ -6,3 +6,7 @@
 - [Single-mode upgrade on a toy task](results/upgrade-demo/result.md) (2026-11-26, CPU toy):
   retraining only the `code` MLPs keeps thinking bit-identical, but with loss on code alone the
   frozen `answer` mode stops matching the new code; loss on all tokens recovers most of it.
+- [Pilot `sft-s0` loss against the base](results/sft-loss-vs-base/result.md) (2026-11-27, CPU
+  recomputation of a 2080 Ti run): on unseen rows the fine-tune is 0.157 nats per token below the
+  base by the end of pass 1, two thirds of it gained in the first 20 steps; `code` tokens are
+  0.39% of the loss and barely move.
