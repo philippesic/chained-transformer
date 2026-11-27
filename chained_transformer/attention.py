@@ -92,7 +92,7 @@ def decode_step(
 ) -> torch.Tensor:
     batch, heads, _, dim = query.shape
     groups = key.shape[1]
-    q = query.float().view(batch, groups, heads // groups, dim)
+    q = query.float().reshape(batch, groups, heads // groups, dim)
     scores = torch.matmul(q, key.float().transpose(-1, -2))
     scores = scores * (dim**-0.5 if scaling is None else scaling)
     if attention_mask is not None:
@@ -101,7 +101,7 @@ def decode_step(
         else:
             scores = scores + attention_mask.float()
     out = torch.matmul(torch.softmax(scores, dim=-1), value.float())
-    return out.view(batch, heads, 1, dim)
+    return out.reshape(batch, heads, 1, dim)
 
 
 def lean_sdpa(

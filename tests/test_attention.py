@@ -55,6 +55,8 @@ def test_lean_decode_step_matches_sdpa_over_repeated_heads() -> None:
         )
         got = decode_step(query, key, value, attn_mask, None)
         assert got.dtype == torch.float32
+        strided = query.transpose(1, 2).contiguous().transpose(1, 2)
+        torch.testing.assert_close(decode_step(strided, key, value, attn_mask, None), got)
         torch.testing.assert_close(got, want, rtol=1e-5, atol=1e-6)
     scaled = decode_step(query, key, value, None, 0.5)
     want = F.scaled_dot_product_attention(
