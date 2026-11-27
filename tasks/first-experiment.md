@@ -60,6 +60,33 @@ Blocked on the 5080: the GPU smoke (`python -m tools.gpu_smoke`) has not run. On
 00:00, BitDraft's 4-bit control run (`control-run-3`, pueue `gpu` group) held 12.2 GB of the
 GPU at 99% utilisation. No GPU memory or step-time numbers exist yet.
 
+Decided 2026-11-26 (Philip, via the Duet thread): run the pilot on the 2080 Ti from branch
+`cloud/moe-fix` with kill rule `seed-mean`, seeds 0 and 1, the verdict eval set and
+`--seq-len 8192`. The proposed `equal-domains-8k` mix held only 55 complete rows (each would be
+seen about 145 times in 1,000 steps of 8 rows), so Philip chose a larger `natural-8k` build
+instead: `artifacts/data/ot3-natural-8k`, 2,246 complete rows (science 1,520, math 503,
+code 223; 11.6M tokens, mean 5,156 per row), about 3.6 passes in a training run. This settles
+decisions 1 and 2 for the pilot. `plan --replace` can still change settings before any eval runs.
+
+Pilot `pilot-0p6b-8k` (pueue `ct` task 1691, started 2026-11-26 about 21:00 local):
+
+- 2080 Ti verification on `cloud/moe-fix`: `moe` matches base 3/3 on both smoke benchmarks
+  and is bitwise exact in `gpu_equivalence` at batch 1 and 3; memory at 8k peaks at 8.3 GiB.
+- Measured 8k step times per row: sft 11.2 s, full 11.8 s, lora 11.5 s, moe 14.1 s
+  (`artifacts/pilot-budget/2080-8192.json`). Estimate to the verdict: 6.9 to 10.4 days
+  (training about 111 h measured, evals 55 to 138 h assumed). Kept at 8k because every row
+  fits and 4096 cuts most answers.
+- Preflight: the question is whether `full` beats `sft` and `moe` by about 2 points. Under
+  `seed-mean` with 2 seeds, a true 2-point gap continues 69% of the time and no gap 1%
+  (`tools.eval_power --odds`). Kill or repair on a training traceback, NaN or diverging loss,
+  an eval out-of-memory, or step times over 1.5 times the measured ones. The pilot stops
+  cleanly (exit 3) when another process holds the GPU at a step boundary; restart it with the
+  same `pilot run` command once the card is free.
+- Disk: about 160 GB free; 8 checkpoints need about 14 GB. Disposal: keep the checkpoints
+  until the report is written, then keep only what close-results names.
+- Progress: `uv run --locked --no-sync python -m tools.pilot status --root
+  artifacts/pilot/pilot-0p6b-8k`.
+
 Open decisions (proposals, not yet agreed):
 
 1. **Training data.** Proposal: train on complete rows only, and decide whether to rebalance
