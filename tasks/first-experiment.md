@@ -76,12 +76,20 @@ Pilot `pilot-0p6b-8k` (pueue `ct` task 1691, started 2026-11-26 about 21:00 loca
   (`artifacts/pilot-budget/2080-8192.json`). Estimate to the verdict: 6.9 to 10.4 days
   (training about 111 h measured, evals 55 to 138 h assumed). Kept at 8k because every row
   fits and 4096 cuts most answers.
-- Preflight: the question is whether `full` beats `sft` and `moe` by about 2 points. Under
-  `seed-mean` with 2 seeds, a true 2-point gap continues 69% of the time and no gap 1%
-  (`tools.eval_power --odds`). Kill or repair on a training traceback, NaN or diverging loss,
+- Preflight: the question is whether `full` beats `sft` and `moe` by about 2 points. The plan
+  assumed 361 LiveCodeBench problems, but the eval window (2024-10-01 to 2025-02-01) holds
+  only 166 (found 2026-11-27 by the overnight thread). After `sft-s0`'s eval the sample grows
+  math500 to all 500 and that eval resumes for the extra problems. Under `seed-mean` with
+  2 seeds, a true 2-point gap then continues 59.5% of the time at 10% discordance (42% at 15%,
+  31% at 20%), down from 69%; no gap stays at 1%. Widening LiveCodeBench beyond the window
+  (all 880 of release_v5: 79%) is Philip's call; `--resume` keeps answered problems. Kill or repair on a training traceback, NaN or diverging loss,
   an eval out-of-memory, or step times over 1.5 times the measured ones. The pilot stops
   cleanly (exit 3) when another process holds the GPU at a step boundary; restart it with the
   same `pilot run` command once the card is free.
+- Eval memory: commit eb7987d (from the overnight thread, CPU-tested only) keeps refilled eval
+  batches within the length their batch size was budgeted for and prefills in 512-token
+  chunks; without it a carried 8k row was expected to run out of memory. If the first eval
+  still runs out of memory, `plan --replace` with `--eval-extra="--no-refill"`; answers are kept.
 - Disk: about 160 GB free; 8 checkpoints need about 14 GB. Disposal: keep the checkpoints
   until the report is written, then keep only what close-results names.
 - Progress: `uv run --locked --no-sync python -m tools.pilot status --root
