@@ -133,9 +133,12 @@ Decided 2026-11-27 (Philip): every eval uses `--attention lean` with `--eval-bat
 LiveCodeBench widens to 341 problems (commit 23f3466). Merged `overnight/speed-on-moe-fix`
 (2a67840), then `plan --replace` with those flags; the training arguments are unchanged and
 MATH500's verdict sample became 383. `sft-s0`'s 4 answers from the failed path were moved to
-`sft-s0/eval-auto-oom-20261127` (delete once the report is written). The pilot restarts after
-`full-s0` training as pueue `ct` task 1696 (jobwatch `ct-pilot-0p6b-8k-lean`), with
-`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` to reduce fragmentation.
+`sft-s0/eval-auto-oom-20261127` (delete once the report is written). Philip paused and then killed
+the run on 2026-11-27 at 11:35 (`full-s0` at step 44 of 1,000, discarded; the queued restart
+removed). State: `sft-s0` trained with checkpoint saved, its eval not run on the new path; every
+other run pending. To resume, run `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True uv run
+--locked --no-sync python -m tools.pilot run --root artifacts/pilot/pilot-0p6b-8k` in `ct`
+through jobwatch; `full-s0` would train from step 0.
 
 Open decisions (proposals, not yet agreed):
 
