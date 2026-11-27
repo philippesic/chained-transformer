@@ -19,3 +19,6 @@
   padded width; a leaner path is 3.9 to 6.0 times faster per step on CPU with identical answers.
   A third of the base model's answers hit the 8,192-token cap, and none of the capped MATH500
   answers scored.
+- [Mode probe](results/mode-probe/result.md) (2026-11-27, CPU): a linear probe on base hidden
+  states separates think, code and answer positions with 80% balanced accuracy at layer 2 and
+  about 90% from layer 12 on (33% baseline).

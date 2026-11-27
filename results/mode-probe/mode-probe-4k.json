@@ -1,0 +1,56 @@
+{
+  "base": "Qwen/Qwen3-0.6B",
+  "rows": 12,
+  "tokens": 1670,
+  "layers": [
+    0,
+    1,
+    2,
+    4,
+    8,
+    12,
+    16,
+    20,
+    24,
+    28
+  ],
+  "position_mode": {
+    "0": 0.599,
+    "1": 0.7109,
+    "2": 0.8151,
+    "4": 0.8958,
+    "8": 0.8828,
+    "12": 0.9557,
+    "16": 0.9714,
+    "20": 0.9766,
+    "24": 0.9609,
+    "28": 0.9661,
+    "majority_baseline": 0.5,
+    "test_tokens": 384,
+    "test_by_label": {
+      "think": 192,
+      "code": 0,
+      "answer": 192
+    }
+  },
+  "segment_label": {
+    "0": 0.5912,
+    "1": 0.6957,
+    "2": 0.8203,
+    "4": 0.8926,
+    "8": 0.8851,
+    "12": 0.953,
+    "16": 0.9764,
+    "20": 0.9816,
+    "24": 0.9686,
+    "28": 0.9636,
+    "majority_baseline": 0.5,
+    "test_tokens": 384,
+    "test_by_label": {
+      "think": 194,
+      "code": 0,
+      "answer": 190
+    }
+  },
+  "note": "balanced accuracy on held-out rows (every 5th row); layer 0 is the embedding"
+}
