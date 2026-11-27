@@ -18,6 +18,7 @@ from transformers import (
 from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 
 from chained_transformer.attention import FALLBACKS, use_attention
+from chained_transformer.cache import roomy_cache
 from chained_transformer.checkpoint import load_checkpoint
 from chained_transformer.generate import TokenTexts, generate_separate_models, mode_tracking
 from chained_transformer.modes import MODE_NAMES, Mode
@@ -30,6 +31,10 @@ AUTO_BATCH_CAP = 16
 KV_FRACTION = 0.8
 REFILL_BELOW = 0.5
 PREFILL_CHUNK = 512
+MIN_CALL = 256
+LOOP_TAIL = 768
+LOOP_PERIOD = 256
+LOOP_CHECK = 128
 GiB = 2**30
 
 
@@ -44,6 +49,7 @@ class GenSettings:
     seed: int = 0
     enable_thinking: bool = True
     refill: bool = True
+    stop_loops: bool = False
 
 
 @dataclass(frozen=True)
@@ -56,6 +62,7 @@ class Generation:
     switches: int
     reprefilled_tokens: int = 0
     mode_runs: list[list[int]] = field(default_factory=list)
+    stopped: str | None = None
 
 
 @dataclass
@@ -217,29 +224,69 @@ def _generate_batch(
     return results
 
 
-@dataclass
+@dataclass(eq=False)
 class _Slot:
     problem: Problem
     prompt: list[int]
     new: list[int] = field(default_factory=list)
+    order: int = 0
+
+    @property
+    def length(self) -> int:
+        return len(self.prompt) + len(self.new)
+
+
+def loop_period(tail: Sequence[int]) -> int | None:
+    if len(tail) < LOOP_TAIL + LOOP_PERIOD:
+        return None
+    window = list(tail[-LOOP_TAIL:])
+    for period in range(1, LOOP_PERIOD + 1):
+        if window == list(tail[-LOOP_TAIL - period : -period]):
+            return period
+    return None
 
 
 class _StopOrRefill(StoppingCriteria):
     def __init__(
-        self, width: int, budgets: list[int], eos: list[int], low: int, device: torch.device
+        self,
+        width: int,
+        budgets: list[int],
+        eos: list[int],
+        low: int,
+        device: torch.device,
+        written: list[int] | None = None,
     ) -> None:
         self.width = width
         self.budgets = torch.tensor(budgets, device=device)
         self.eos = torch.tensor(eos, device=device)
         self.ended = torch.zeros(len(budgets), dtype=torch.bool, device=device)
+        self.looped = torch.zeros(len(budgets), dtype=torch.bool, device=device)
         self.low = low
         self.early = False
+        self.written = written
+        self.loop_at: dict[int, int] = {}
+
+    def _mark_loops(self, input_ids: torch.LongTensor, steps: int) -> None:
+        assert self.written is not None
+        span = LOOP_TAIL + LOOP_PERIOD
+        live = ~(self.ended | self.looped | (self.budgets <= steps))
+        rows = [i for i in live.nonzero().flatten().tolist() if self.written[i] + steps >= span]
+        if not rows:
+            return
+        tails = input_ids[rows, -span:].tolist()
+        for i, tail in zip(rows, tails, strict=True):
+            if loop_period(tail) is not None:
+                self.looped[i] = True
+                self.loop_at[i] = steps
 
     def __call__(
         self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs: Any
     ) -> torch.BoolTensor:
+        steps = input_ids.shape[1] - self.width
         self.ended |= torch.isin(input_ids[:, -1], self.eos)
-        done = self.ended | (self.budgets <= input_ids.shape[1] - self.width)
+        if self.written is not None and steps % LOOP_CHECK == 0:
+            self._mark_loops(input_ids, steps)
+        done = self.ended | self.looped | (self.budgets <= steps)
         if int((~done).sum()) <= self.low:
             self.early = True
             return cast(torch.BoolTensor, torch.ones_like(done))
@@ -247,7 +294,11 @@ class _StopOrRefill(StoppingCriteria):
 
 
 def _finish(
-    slot: _Slot, finished: bool, texts: TokenTexts, tok: PreTrainedTokenizerBase
+    slot: _Slot,
+    finished: bool,
+    texts: TokenTexts,
+    tok: PreTrainedTokenizerBase,
+    stopped: str | None = None,
 ) -> Generation:
     start = len(slot.prompt) - 1
     labels = texts.modes(slot.prompt + slot.new)[start : start + len(slot.new)]
@@ -259,7 +310,36 @@ def _finish(
         labels_of(labels),
         switches_of(labels),
         mode_runs=runs_of(labels),
+        stopped=stopped,
     )
+
+
+def length_class(length: int, floor: int) -> int:
+    level = 0
+    while length >= floor << level:
+        level += 1
+    return level
+
+
+def pick_group(
+    pool: Sequence[_Slot], rows: int, capacity: int, cap: int
+) -> tuple[list[_Slot], bool]:
+    floor = max(1, capacity // rows // 2)
+    classes: dict[int, list[_Slot]] = {}
+    for slot in pool:
+        classes.setdefault(length_class(slot.length, floor), []).append(slot)
+    first: list[_Slot] = []
+    for level in sorted(classes, reverse=True):
+        members = sorted(classes[level], key=lambda s: (-s.length, s.order))
+        head = members[0].length
+        need = max(cap - len(s.new) for s in members)
+        ahead = min(need, max(MIN_CALL, head // 2))
+        fit = max(1, min(rows, capacity // (head + ahead)))
+        if not first:
+            first = members[:fit]
+        if len(members) >= fit:
+            return members[:fit], True
+    return first, False
 
 
 @torch.no_grad()
@@ -270,6 +350,7 @@ def _generate_refill(
     settings: GenSettings,
     step: int,
     on_done: Callable[[Generation], None],
+    rows: int | None = None,
 ) -> int:
     tok = runner.tokenizer
     eos = _eos_ids(tok)
@@ -283,28 +364,34 @@ def _generate_refill(
                     chat_prompt(tok, p, settings.enable_thinking), add_special_tokens=False
                 ).input_ids
             ),
+            order=len(problems) - 1 - i,
         )
-        for p in reversed(problems)
+        for i, p in enumerate(reversed(problems))
     ]
     model = runner.models[0]
-    widest = max((len(s.prompt) for s in queue), default=0) + cap
-    active: list[_Slot] = []
+    capacity = step * (max((len(s.prompt) for s in queue), default=0) + cap)
+    rows = max(step, rows or step)
+    pool: list[_Slot] = []
     calls = 0
-    while queue or active:
-        while queue and len(active) < step:
-            active.append(queue.pop())
-        rows = [s.prompt + s.new for s in active]
-        width = max(len(r) for r in rows)
-        ids = torch.full((len(rows), width), pad, dtype=torch.long)
+    while queue or pool:
+        active, full = pick_group(pool, rows, capacity, cap)
+        while not full and queue:
+            pool.append(queue.pop())
+            active, full = pick_group(pool, rows, capacity, cap)
+        width = max(s.length for s in active)
+        ids = torch.full((len(active), width), pad, dtype=torch.long)
         mask = torch.zeros_like(ids)
-        for i, r in enumerate(rows):
-            ids[i, width - len(r) :] = torch.tensor(r, dtype=torch.long)
-            mask[i, width - len(r) :] = 1
+        for i, slot in enumerate(active):
+            ids[i, width - slot.length :] = torch.tensor(slot.prompt + slot.new, dtype=torch.long)
+            mask[i, width - slot.length :] = 1
         budgets = [cap - len(s.new) for s in active]
-        low = int(step * REFILL_BELOW) if queue else -1
-        stop = _StopOrRefill(width, budgets, eos, low, runner.device)
+        waiting = bool(queue) or len(pool) > len(active)
+        low = int(len(active) * REFILL_BELOW) if waiting else -1
+        written = [len(s.new) for s in active] if settings.stop_loops else None
+        stop = _StopOrRefill(width, budgets, eos, low, runner.device, written)
+        room = min(max(budgets), max(1, capacity // len(active) - width))
         config = GenerationConfig(
-            max_new_tokens=min(max(budgets), widest - width),
+            max_new_tokens=room,
             do_sample=settings.do_sample,
             temperature=settings.temperature if settings.do_sample else None,
             top_p=settings.top_p if settings.do_sample else None,
@@ -319,6 +406,7 @@ def _generate_refill(
             "attention_mask": mask.to(runner.device),
             "generation_config": config,
             "stopping_criteria": StoppingCriteriaList([stop]),
+            "cache": roomy_cache(width + room),
         }
         if runner.routing is None:
             out = model.generate(**inputs)
@@ -326,15 +414,14 @@ def _generate_refill(
             with mode_tracking(model, runner.routing, texts):
                 out = model.generate(**inputs)
         calls += 1
-        carried = []
         for i, slot in enumerate(active):
-            kept, finished = _trim(out[i, width : width + budgets[i]].tolist(), set(eos))
+            limit = stop.loop_at.get(i, budgets[i])
+            kept, finished = _trim(out[i, width : width + limit].tolist(), set(eos))
             slot.new += kept
-            if finished or len(slot.new) >= cap:
-                on_done(_finish(slot, finished, texts, tok))
-            else:
-                carried.append(slot)
-        active = carried
+            looped = i in stop.loop_at and not finished
+            if finished or looped or len(slot.new) >= cap:
+                on_done(_finish(slot, finished, texts, tok, "loop" if looped else None))
+                pool.remove(slot)
     return calls
 
 
@@ -433,12 +520,14 @@ def generate_all(
         if on_done is not None:
             on_done(g)
 
-    refill = settings.refill and not runner.separate and len(problems) > step
+    refill = settings.refill and not runner.separate
+    refill = refill and (len(problems) > step or settings.stop_loops)
+    rows = min(AUTO_BATCH_CAP, len(problems)) if settings.batch_size == 0 else step
     calls = 0
     fallbacks = len(FALLBACKS)
     start = time.perf_counter()
     if refill:
-        calls = _generate_refill(runner, texts, problems, settings, step, done)
+        calls = _generate_refill(runner, texts, problems, settings, step, done, rows)
     else:
         for i in range(0, len(problems), step):
             chunk = problems[i : i + step]
@@ -457,6 +546,8 @@ def generate_all(
         "tokens_per_s": round(tokens / elapsed, 2) if elapsed > 0 else 0.0,
         "batch_size": step,
         "refill": refill,
+        "refill_rows": rows if refill else None,
+        "loop_stops": sum(g.stopped == "loop" for g in results),
         "generate_calls": calls,
         "attention_math_fallbacks": len(FALLBACKS) - fallbacks,
         **peak_memory_gib(runner.device),

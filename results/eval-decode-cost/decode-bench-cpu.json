@@ -1,0 +1,119 @@
+{
+  "base": "Qwen/Qwen3-0.6B",
+  "device": "cpu",
+  "dtype": "float32",
+  "steps": 8,
+  "step_ms_model": "fixed_ms + ms_per_1000_cache_tokens * rows * width / 1000",
+  "fits": {
+    "auto+dynamic": {
+      "fixed_ms": 79.19,
+      "ms_per_1000_cache_tokens": 146.056
+    },
+    "auto+roomy": {
+      "fixed_ms": 241.89,
+      "ms_per_1000_cache_tokens": 97.912
+    },
+    "lean+dynamic": {
+      "fixed_ms": 25.42,
+      "ms_per_1000_cache_tokens": 60.915
+    },
+    "lean+roomy": {
+      "fixed_ms": 147.66,
+      "ms_per_1000_cache_tokens": 16.907
+    }
+  },
+  "shapes": [
+    {
+      "attention": "auto",
+      "cache": "dynamic",
+      "rows": 6,
+      "width": 1024,
+      "cache_tokens": 6144,
+      "prefill_s": 12.537,
+      "prefill_tokens_per_s": 490.1,
+      "step_ms": 976.56
+    },
+    {
+      "attention": "auto",
+      "cache": "dynamic",
+      "rows": 6,
+      "width": 3072,
+      "cache_tokens": 18432,
+      "prefill_s": 50.225,
+      "prefill_tokens_per_s": 367.0,
+      "step_ms": 2771.3
+    },
+    {
+      "attention": "auto",
+      "cache": "roomy",
+      "rows": 6,
+      "width": 1024,
+      "cache_tokens": 6144,
+      "prefill_s": 12.96,
+      "prefill_tokens_per_s": 474.1,
+      "step_ms": 843.46,
+      "max_abs_logit_diff_vs_first": 0.0,
+      "same_argmax_rate": 1.0
+    },
+    {
+      "attention": "auto",
+      "cache": "roomy",
+      "rows": 6,
+      "width": 3072,
+      "cache_tokens": 18432,
+      "prefill_s": 47.006,
+      "prefill_tokens_per_s": 392.1,
+      "step_ms": 2046.6,
+      "max_abs_logit_diff_vs_first": 0.0,
+      "same_argmax_rate": 1.0
+    },
+    {
+      "attention": "lean",
+      "cache": "dynamic",
+      "rows": 6,
+      "width": 1024,
+      "cache_tokens": 6144,
+      "prefill_s": 13.052,
+      "prefill_tokens_per_s": 470.7,
+      "step_ms": 399.68,
+      "max_abs_logit_diff_vs_first": 3e-05,
+      "same_argmax_rate": 1.0
+    },
+    {
+      "attention": "lean",
+      "cache": "dynamic",
+      "rows": 6,
+      "width": 3072,
+      "cache_tokens": 18432,
+      "prefill_s": 49.348,
+      "prefill_tokens_per_s": 373.5,
+      "step_ms": 1148.2,
+      "max_abs_logit_diff_vs_first": 4e-05,
+      "same_argmax_rate": 1.0
+    },
+    {
+      "attention": "lean",
+      "cache": "roomy",
+      "rows": 6,
+      "width": 1024,
+      "cache_tokens": 6144,
+      "prefill_s": 12.899,
+      "prefill_tokens_per_s": 476.3,
+      "step_ms": 251.54,
+      "max_abs_logit_diff_vs_first": 3e-05,
+      "same_argmax_rate": 1.0
+    },
+    {
+      "attention": "lean",
+      "cache": "roomy",
+      "rows": 6,
+      "width": 3072,
+      "cache_tokens": 18432,
+      "prefill_s": 48.861,
+      "prefill_tokens_per_s": 377.2,
+      "step_ms": 459.29,
+      "max_abs_logit_diff_vs_first": 4e-05,
+      "same_argmax_rate": 1.0
+    }
+  ]
+}

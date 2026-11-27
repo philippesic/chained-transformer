@@ -27,8 +27,8 @@ elsewhere without asking.
 - `chained_transformer/model.py`: base model loading and arm construction.
 - `chained_transformer/data.py`, `chained_transformer/train.py`, `chained_transformer/evals.py`: entry points (`python -m ...`).
 - `chained_transformer/mix.py`: per-row switching statistics and the data mix policies.
-- `chained_transformer/optim.py`: `ChunkedAdamW8bit`. `chained_transformer/attention.py`: the fused-only attention. `chained_transformer/memory.py`: the training memory estimate.
-- `tools/check.py`: the commit gate. `tools/gpu_equivalence.py`, `tools/gpu_smoke.py`, `tools/memory_check.py`: hardware lanes. `tools/memtrace.py`: CPU live-bytes tracker. `tools/mode_probe.py`: linear probes for mode on base hidden states.
+- `chained_transformer/optim.py`: `ChunkedAdamW8bit`. `chained_transformer/attention.py`: the fused-only attention and the lean decode step. `chained_transformer/cache.py`: the preallocated KV cache. `chained_transformer/memory.py`: the training memory estimate.
+- `tools/check.py`: the commit gate. `tools/gpu_equivalence.py`, `tools/gpu_smoke.py`, `tools/memory_check.py`: hardware lanes. `tools/memtrace.py`: CPU live-bytes tracker. `tools/mode_probe.py`: linear probes for mode on base hidden states. `tools/loss_vs_base.py`: a run's logged loss against the base model on the same rows. `tools/decode_bench.py`: decode step time by attention and cache choice. `tools/eval_sim.py`: eval decode hours from response lengths and a step-time model.
 - `docs/routing-and-looping.md`: design note on combining mode routing with looped layers.
 
 ## Rules

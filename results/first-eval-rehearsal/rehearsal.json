@@ -1,0 +1,241 @@
+{
+  "plan": {
+    "name": "rehearsal",
+    "data": "/home/philip/chained-transformer/artifacts/data/ot3-natural-8k",
+    "base": "Qwen/Qwen3-0.6B",
+    "seeds": [
+      0
+    ],
+    "steps": 2,
+    "seq_len": 1024,
+    "grad_accum": 2,
+    "warmup": 1,
+    "lr": {
+      "sft": 1e-05,
+      "full": 1e-05,
+      "lora": 0.0001,
+      "moe": 1e-05,
+      "separate": 1e-05
+    },
+    "complete_only": true,
+    "lora_rank": 64,
+    "moe_top_k": 2,
+    "train_extra": [],
+    "benchmarks": [
+      "math500",
+      "humanevalplus",
+      "livecodebench"
+    ],
+    "eval_limit": 6,
+    "eval_max_new_tokens": 768,
+    "eval_set": "verdict",
+    "eval_sample": {
+      "math500": 361,
+      "humanevalplus": 164,
+      "livecodebench": 361
+    },
+    "eval_batch_size": 3,
+    "eval_extra": [],
+    "device": "cpu",
+    "kill_rule": "seed-mean"
+  },
+  "runs": {
+    "sft-s0": {
+      "train": "done",
+      "eval": "done",
+      "eval_code": {
+        "commit": "2a66137ed52cfb541543bedda8f35b945a798870",
+        "dirty": false
+      },
+      "benchmarks": {
+        "math500": {
+          "n": 6,
+          "accuracy": 0.0,
+          "generate_calls": 2,
+          "refill": true,
+          "tokens_per_s_cpu": 11.14,
+          "source_problems_in_window": null
+        },
+        "humanevalplus": {
+          "n": 6,
+          "accuracy": 0.1667,
+          "generate_calls": 2,
+          "refill": true,
+          "tokens_per_s_cpu": 13.9,
+          "source_problems_in_window": null
+        },
+        "livecodebench": {
+          "n": 6,
+          "accuracy": 0.0,
+          "generate_calls": 2,
+          "refill": true,
+          "tokens_per_s_cpu": 6.26,
+          "source_problems_in_window": 166
+        }
+      }
+    },
+    "full-s0": {
+      "train": "done",
+      "eval": "done",
+      "eval_code": {
+        "commit": "31b0bd8889f5c6242ad6075395ed59e2c3d80566",
+        "dirty": true
+      },
+      "benchmarks": {
+        "math500": {
+          "n": 6,
+          "accuracy": 0.0,
+          "generate_calls": 2,
+          "refill": true,
+          "tokens_per_s_cpu": 11.71,
+          "source_problems_in_window": null
+        },
+        "humanevalplus": {
+          "n": 6,
+          "accuracy": 0.1667,
+          "generate_calls": 2,
+          "refill": true,
+          "tokens_per_s_cpu": 14.6,
+          "source_problems_in_window": null
+        },
+        "livecodebench": {
+          "n": 6,
+          "accuracy": 0.0,
+          "generate_calls": 2,
+          "refill": true,
+          "tokens_per_s_cpu": 5.95,
+          "source_problems_in_window": 166
+        }
+      }
+    },
+    "lora-s0": {
+      "train": "done",
+      "eval": "done",
+      "eval_code": {
+        "commit": "21215e995cb2dc2841247f443d6e941c1d84911d",
+        "dirty": false
+      },
+      "benchmarks": {
+        "math500": {
+          "n": 6,
+          "accuracy": 0.0,
+          "generate_calls": 2,
+          "refill": true,
+          "tokens_per_s_cpu": 5.24,
+          "source_problems_in_window": null
+        },
+        "humanevalplus": {
+          "n": 6,
+          "accuracy": 0.0,
+          "generate_calls": 2,
+          "refill": true,
+          "tokens_per_s_cpu": 6.22,
+          "source_problems_in_window": null
+        },
+        "livecodebench": {
+          "n": 6,
+          "accuracy": 0.0,
+          "generate_calls": 2,
+          "refill": true,
+          "tokens_per_s_cpu": 2.94,
+          "source_problems_in_window": 166
+        }
+      }
+    },
+    "moe-s0": {
+      "train": "done",
+      "eval": "done",
+      "eval_code": {
+        "commit": "21215e995cb2dc2841247f443d6e941c1d84911d",
+        "dirty": false
+      },
+      "benchmarks": {
+        "math500": {
+          "n": 6,
+          "accuracy": 0.0,
+          "generate_calls": 2,
+          "refill": true,
+          "tokens_per_s_cpu": 4.42,
+          "source_problems_in_window": null
+        },
+        "humanevalplus": {
+          "n": 6,
+          "accuracy": 0.3333,
+          "generate_calls": 2,
+          "refill": true,
+          "tokens_per_s_cpu": 5.08,
+          "source_problems_in_window": null
+        },
+        "livecodebench": {
+          "n": 6,
+          "accuracy": 0.1667,
+          "generate_calls": 2,
+          "refill": true,
+          "tokens_per_s_cpu": 2.76,
+          "source_problems_in_window": 166
+        }
+      }
+    }
+  },
+  "full_s0_current_path_vs_speed_branch": {
+    "math500": {
+      "answers": 6,
+      "identical_text": 6,
+      "identical_mode_runs": 6,
+      "new_tokens": 4608
+    },
+    "humanevalplus": {
+      "answers": 6,
+      "identical_text": 6,
+      "identical_mode_runs": 6,
+      "new_tokens": 4608
+    },
+    "livecodebench": {
+      "answers": 6,
+      "identical_text": 6,
+      "identical_mode_runs": 6,
+      "new_tokens": 4608
+    }
+  },
+  "compare": {
+    "scores_points": {
+      "sft": {
+        "0": {
+          "math500": 0.0,
+          "humanevalplus": 16.669999999999998,
+          "livecodebench": 0.0
+        }
+      },
+      "full": {
+        "0": {
+          "math500": 0.0,
+          "humanevalplus": 16.669999999999998,
+          "livecodebench": 0.0
+        }
+      },
+      "lora": {
+        "0": {
+          "math500": 0.0,
+          "humanevalplus": 0.0,
+          "livecodebench": 0.0
+        }
+      },
+      "moe": {
+        "0": {
+          "math500": 0.0,
+          "humanevalplus": 33.33,
+          "livecodebench": 16.669999999999998
+        }
+      }
+    },
+    "kill_rule": "kill rule met: a seed mean is below 12.26 points (full - sft 0.00, full - moe -11.11 points)",
+    "rule": "seed-mean: seed mean of each margin at least 12.26 points (one-sided 5% test)",
+    "not_counted": {}
+  },
+  "train_loss_at_last_step": {
+    "sft-s0": 1.6078,
+    "full-s0": 1.6078,
+    "lora-s0": 1.5597,
+    "moe-s0": 1.6084
+  }
+}

@@ -44,10 +44,19 @@ pueue add -g ct -- uv run --locked --no-sync python -m evals.run --model <checkp
 - The `separate` arm re-prefills a model's missed tokens in chunks of 2,048 and keeps only the
   last position's logits, so a switch after thousands of thinking tokens does not materialise
   logits for every position.
-- Batched decoding refills: when half the rows of a batch have finished and problems are
-  waiting, the `generate` call stops, unfinished rows carry their tokens over and re-prefill,
-  and new problems take the free rows. Greedy output is identical to decoding one problem at a
-  time (tested). `--no-refill` keeps fixed batches; `perf.generate_calls` counts the calls.
+- Batched decoding refills: when half the rows of a group have finished and others are
+  waiting, the `generate` call stops and unfinished rows carry their tokens over and re-prefill
+  (in chunks of 512 tokens). Rows run with others of the same length class, because a padded
+  batch pays for its longest row on every row, in memory and in decode time. The budget is a
+  token capacity, the batch that fits at full width times prompt plus `--max-new-tokens`: every
+  call keeps rows times width inside it, so short rows run up to 16 at a time (`perf.refill_rows`)
+  and long rows wait for a group of their own. Each call decodes into a cache allocated once at
+  its final width. Greedy output is identical to decoding one problem at a time (tested).
+  `--no-refill` keeps fixed batches; `perf.generate_calls` counts the calls. Unfinished rows
+  waiting for a group are lost if the run is killed, like the rows of a running batch.
+- `--stop-loops` (off by default) ends a response once its last 768 tokens repeat exactly with a
+  period of at most 256, checked every 128 tokens, and records `stopped: "loop"`; it needs the
+  refill decoder. It changes what a response is, so use one setting for every arm.
 - `--sample N` or `--sample BENCH=N` evaluates a fixed subset: problems ordered by a salted hash
   of their ids, so a larger N keeps every problem of a smaller one. `--resume` keeps the complete
   rows of an earlier `responses.jsonl` and generates only the missing problems; it refuses when
@@ -62,6 +71,13 @@ pueue add -g ct -- uv run --locked --no-sync python -m evals.run --model <checkp
   memory-efficient kernel takes only fp16 and fp32 there, so plain bf16 attention would fall
   back to the math kernel; the fused path upcasts to fp32 instead. `--attention sdpa` or `eager`
   pick Hugging Face's own.
+- `--attention lean` is the fused path, except that one-token decode steps are computed over the
+  grouped cache in fp32 without first repeating it to 16 heads. Same arithmetic up to summation
+  order; in bf16 a long greedy response can still part from the `auto` one, so every arm of a
+  comparison uses one choice (the resume check enforces it per directory). Not yet run on a GPU:
+  `python -m tools.decode_bench` times a decode step for each attention and cache choice and
+  reports how often they pick the same token. See
+  [the decode-cost result](../results/eval-decode-cost/result.md).
 - `--limit N` marks the report as a smoke run. `--score-only` rescores saved responses and keeps
   the earlier report's sample, speed figures and thinking setting.
 - With `--no-thinking` the chat template puts an empty think block in the prompt, so responses

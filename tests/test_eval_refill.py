@@ -139,3 +139,110 @@ def test_refill_stays_inside_the_budgeted_width(
     assert all(chunk == 5 for _, _, _, chunk in calls)
     for g in refilled:
         assert g == alone[g.task_id]
+
+
+def _slot(length: int, new: int, order: int = 0) -> generation._Slot:
+    return generation._Slot(
+        Problem("math500", f"s{order}", ""), [0] * (length - new), [0] * new, order
+    )
+
+
+def test_groups_hold_rows_of_one_length_class(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(generation, "MIN_CALL", 4)
+    assert [generation.length_class(n, 150) for n in (0, 149, 150, 299, 300, 600)] == [
+        0,
+        0,
+        1,
+        1,
+        2,
+        3,
+    ]
+    lengths = [(20, 5), (40, 5), (160, 100), (170, 100), (180, 100), (320, 150)]
+    pool = [_slot(length, new, i) for i, (length, new) in enumerate(lengths)]
+    group, full = generation.pick_group(pool, rows=4, capacity=1200, cap=200)
+    assert not full and [s.length for s in group] == [320]
+    pool += [_slot(30, 5, 6), _slot(10, 5, 7)]
+    group, full = generation.pick_group(pool, rows=4, capacity=1200, cap=200)
+    assert full and [s.length for s in group] == [40, 30, 20, 10]
+    pool.append(_slot(175, 100, 8))
+    group, full = generation.pick_group(pool, rows=4, capacity=1200, cap=200)
+    assert full and [s.length for s in group] == [180, 175, 170, 160]
+    pool += [_slot(310, 150, 9), _slot(330, 150, 10)]
+    group, full = generation.pick_group(pool, rows=4, capacity=1200, cap=200)
+    assert full and [s.length for s in group] == [330, 320, 310]
+
+
+def test_a_long_row_alone_still_gets_a_call() -> None:
+    group, full = generation.pick_group([_slot(590, 199)], rows=4, capacity=600, cap=200)
+    assert full and len(group) == 1
+
+
+@pytest.mark.parametrize("arm", ["full", "plain"])
+def test_grouped_refill_runs_more_rows_inside_the_same_capacity(
+    runners: dict[str, Runner], arm: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = runners[arm]
+    stop = _stop_token(runner, monkeypatch)
+    monkeypatch.setattr(generation, "_eos_ids", lambda tok: [stop])
+    alone = _by_id(runner, SETTINGS)
+    monkeypatch.setattr(generation, "MIN_CALL", 2)
+    model = runner.models[0]
+    generate = model.generate
+    calls: list[tuple[int, int, int]] = []
+
+    def spy(**kwargs: Any) -> torch.Tensor:
+        out = cast(torch.Tensor, generate(**kwargs))
+        calls.append((out.shape[0], kwargs["input_ids"].shape[1], out.shape[1]))
+        return out
+
+    monkeypatch.setattr(model, "generate", spy)
+    tok = runner.tokenizer
+    prompts = [generation.chat_prompt(tok, p, SETTINGS.enable_thinking) for p in _problems()]
+    longest = max(len(tok(p, add_special_tokens=False).input_ids) for p in prompts)
+    capacity = 2 * (longest + SETTINGS.max_new_tokens)
+    texts = generation.TokenTexts.from_tokenizer(tok)
+    done: list[Generation] = []
+    settings = replace(SETTINGS, batch_size=2, refill=True)
+    generation._generate_refill(runner, texts, _problems(), settings, 2, done.append, rows=6)
+    assert all(rows * after <= capacity for rows, _, after in calls)
+    assert max(rows for rows, _, _ in calls) > 2
+    assert sorted(g.task_id for g in done) == sorted(alone)
+    for g in done:
+        assert g == alone[g.task_id]
+
+
+@pytest.mark.parametrize("arm", ["full", "plain"])
+def test_loop_stop_cuts_a_repeating_row_where_the_repeat_is_proven(
+    runners: dict[str, Runner], arm: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = runners[arm]
+    monkeypatch.setattr(generation, "_eos_ids", lambda tok: [len(runner.tokenizer) + 7])
+    monkeypatch.setattr(generation, "LOOP_TAIL", 12)
+    monkeypatch.setattr(generation, "LOOP_PERIOD", 6)
+    monkeypatch.setattr(generation, "LOOP_CHECK", 1)
+    finish = generation._finish
+    tokens: dict[bool, dict[str, list[int]]] = {False: {}, True: {}}
+    settings = replace(SETTINGS, max_new_tokens=80, batch_size=3, refill=True)
+    runs: dict[bool, list[Generation]] = {}
+    for stop_loops in (False, True):
+
+        def spy(
+            slot: generation._Slot, *args: Any, into: dict[str, list[int]] = tokens[stop_loops]
+        ) -> Generation:
+            into[slot.problem.task_id] = list(slot.new)
+            return finish(slot, *args)
+
+        monkeypatch.setattr(generation, "_finish", spy)
+        runs[stop_loops], perf = generate_all(
+            runner, _problems(), replace(settings, stop_loops=stop_loops)
+        )
+        assert perf["loop_stops"] == sum(g.stopped == "loop" for g in runs[stop_loops])
+    assert all(g.stopped is None and g.new_tokens == 80 for g in runs[False])
+    cut = 0
+    for g in runs[True]:
+        whole, kept = tokens[False][g.task_id], tokens[True][g.task_id]
+        proven = [m for m in range(18, 81) if generation.loop_period(whole[:m]) is not None]
+        assert kept == whole[: proven[0] if proven else 80]
+        assert g.stopped == ("loop" if proven and proven[0] < 80 else None) and not g.finished
+        cut += g.stopped == "loop"
+    assert 0 < cut < len(runs[True])
