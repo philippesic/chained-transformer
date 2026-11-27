@@ -25,8 +25,9 @@ def test_bench_compares_attention_choices_on_the_same_tokens(
     argv = ["--base", str(base), "--device", "cpu", "--shapes", "3x20", "2x40"]
     decode_bench.main([*argv, "--steps", "6", "--out", str(out)])
     report = json.loads(out.read_text())
-    assert [r["attention"] for r in report["shapes"]] == ["auto", "auto", "lean", "lean"]
-    lean = [r for r in report["shapes"] if r["attention"] == "lean"]
-    assert all(r["same_argmax_rate"] == 1.0 for r in lean)
-    assert all(r["max_abs_logit_diff_vs_first"] < 1e-3 for r in lean)
-    assert set(report["fits"]) == {"auto", "lean"}
+    variants = [(r["attention"], r["cache"]) for r in report["shapes"]]
+    assert variants[::2] == [(a, c) for a in ("auto", "lean") for c in ("dynamic", "roomy")]
+    later = report["shapes"][2:]
+    assert all(r["same_argmax_rate"] == 1.0 for r in later)
+    assert all(r["max_abs_logit_diff_vs_first"] < 1e-3 for r in later)
+    assert set(report["fits"]) == {"auto+dynamic", "auto+roomy", "lean+dynamic", "lean+roomy"}

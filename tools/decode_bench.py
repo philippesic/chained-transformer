@@ -11,9 +11,11 @@ import torch
 from transformers import DynamicCache
 
 from chained_transformer.attention import use_attention
+from chained_transformer.cache import roomy_cache
 from chained_transformer.model import BASE_MODEL, load_base
 
 DTYPES = {"float32": torch.float32, "bfloat16": torch.bfloat16}
+CACHES = ("dynamic", "roomy")
 PREFILL_CHUNK = 512
 
 
@@ -43,12 +45,17 @@ def sync(device: torch.device) -> None:
 
 @torch.no_grad()
 def run_shape(
-    model: Any, ids: torch.Tensor, mask: torch.Tensor, steps: int, forced: torch.Tensor | None
+    model: Any,
+    ids: torch.Tensor,
+    mask: torch.Tensor,
+    steps: int,
+    forced: torch.Tensor | None,
+    roomy: bool,
 ) -> dict[str, Any]:
     device = ids.device
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
-    cache = DynamicCache()
+    cache = roomy_cache(ids.shape[1] + steps) if roomy else DynamicCache()
     start = time.perf_counter()
     for begin in range(0, ids.shape[1], PREFILL_CHUNK):
         end = min(begin + PREFILL_CHUNK, ids.shape[1])
@@ -112,6 +119,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--dtype", choices=list(DTYPES))
     parser.add_argument("--attention", nargs="+", default=["auto", "lean"])
+    parser.add_argument("--cache", nargs="+", choices=CACHES, default=list(CACHES))
     parser.add_argument(
         "--shapes",
         nargs="+",
@@ -140,15 +148,19 @@ def main(argv: list[str] | None = None) -> None:
     pad = int(model.config.bos_token_id or 0)
     rows_out: list[dict[str, Any]] = []
     reference: dict[tuple[int, int], dict[str, Any]] = {}
-    for choice in args.attention:
+    variants = [(a, c) for a in args.attention for c in args.cache]
+    for choice, cache in variants:
         use_attention(model, choice)
         for rows, width in args.shapes:
             ids, mask = padded_batch(rows, width, model.config.vocab_size, pad, args.seed)
             first = reference.get((rows, width))
             forced = first["tokens"].to(device) if first else None
-            result = run_shape(model, ids.to(device), mask.to(device), args.steps, forced)
+            result = run_shape(
+                model, ids.to(device), mask.to(device), args.steps, forced, cache == "roomy"
+            )
             record = {
                 "attention": choice,
+                "cache": cache,
                 "rows": rows,
                 "width": width,
                 "cache_tokens": rows * width,
@@ -164,10 +176,14 @@ def main(argv: list[str] | None = None) -> None:
             rows_out.append(record)
             print(json.dumps(record), flush=True)
     fits = {
-        choice: fit_line(
-            [(r["cache_tokens"], r["step_ms"]) for r in rows_out if r["attention"] == choice]
+        f"{choice}+{cache}": fit_line(
+            [
+                (r["cache_tokens"], r["step_ms"])
+                for r in rows_out
+                if (r["attention"], r["cache"]) == (choice, cache)
+            ]
         )
-        for choice in args.attention
+        for choice, cache in variants
     }
     report = {
         "base": args.base,

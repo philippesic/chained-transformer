@@ -18,6 +18,7 @@ from transformers import (
 from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 
 from chained_transformer.attention import FALLBACKS, use_attention
+from chained_transformer.cache import roomy_cache
 from chained_transformer.checkpoint import load_checkpoint
 from chained_transformer.generate import TokenTexts, generate_separate_models, mode_tracking
 from chained_transformer.modes import MODE_NAMES, Mode
@@ -388,8 +389,9 @@ def _generate_refill(
         low = int(len(active) * REFILL_BELOW) if waiting else -1
         written = [len(s.new) for s in active] if settings.stop_loops else None
         stop = _StopOrRefill(width, budgets, eos, low, runner.device, written)
+        room = min(max(budgets), max(1, capacity // len(active) - width))
         config = GenerationConfig(
-            max_new_tokens=min(max(budgets), max(1, capacity // len(active) - width)),
+            max_new_tokens=room,
             do_sample=settings.do_sample,
             temperature=settings.temperature if settings.do_sample else None,
             top_p=settings.top_p if settings.do_sample else None,
@@ -404,6 +406,7 @@ def _generate_refill(
             "attention_mask": mask.to(runner.device),
             "generation_config": config,
             "stopping_criteria": StoppingCriteriaList([stop]),
+            "cache": roomy_cache(width + room),
         }
         if runner.routing is None:
             out = model.generate(**inputs)
