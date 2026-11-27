@@ -29,6 +29,7 @@ EOS_TOKENS = ("<|im_end|>", "<|endoftext|>")
 AUTO_BATCH_CAP = 16
 KV_FRACTION = 0.8
 REFILL_BELOW = 0.5
+PREFILL_CHUNK = 512
 GiB = 2**30
 
 
@@ -286,6 +287,7 @@ def _generate_refill(
         for p in reversed(problems)
     ]
     model = runner.models[0]
+    widest = max((len(s.prompt) for s in queue), default=0) + cap
     active: list[_Slot] = []
     calls = 0
     while queue or active:
@@ -302,13 +304,14 @@ def _generate_refill(
         low = int(step * REFILL_BELOW) if queue else -1
         stop = _StopOrRefill(width, budgets, eos, low, runner.device)
         config = GenerationConfig(
-            max_new_tokens=max(budgets),
+            max_new_tokens=min(max(budgets), widest - width),
             do_sample=settings.do_sample,
             temperature=settings.temperature if settings.do_sample else None,
             top_p=settings.top_p if settings.do_sample else None,
             top_k=settings.top_k if settings.do_sample else None,
             eos_token_id=eos,
             pad_token_id=pad,
+            prefill_chunk_size=PREFILL_CHUNK,
         )
         torch.manual_seed(settings.seed + calls)
         inputs = {

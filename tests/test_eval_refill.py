@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import replace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 import torch
@@ -99,3 +99,43 @@ def test_refill_stops_only_while_problems_wait() -> None:
     assert _stops(stop, ids) == [True, True, True, True] and stop.early
     last = generation._StopOrRefill(2, [1, 5], [9], low=-1, device=torch.device("cpu"))
     assert _stops(last, [[1, 1, 3], [1, 1, 3]]) == [True, False]
+
+
+@pytest.mark.parametrize("arm", ["full", "plain"])
+def test_refill_stays_inside_the_budgeted_width(
+    runners: dict[str, Runner], arm: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = runners[arm]
+    stop = _stop_token(runner, monkeypatch)
+    monkeypatch.setattr(generation, "_eos_ids", lambda tok: [stop])
+    alone = _by_id(runner, SETTINGS)
+    monkeypatch.setattr(generation, "PREFILL_CHUNK", 5)
+    model = runner.models[0]
+    generate = model.generate
+    calls: list[tuple[int, int, int, int | None]] = []
+
+    def spy(**kwargs: Any) -> torch.Tensor:
+        out = cast(torch.Tensor, generate(**kwargs))
+        config = kwargs["generation_config"]
+        calls.append(
+            (
+                kwargs["input_ids"].shape[1],
+                out.shape[1],
+                config.max_new_tokens,
+                config.prefill_chunk_size,
+            )
+        )
+        return out
+
+    monkeypatch.setattr(model, "generate", spy)
+    refilled, _ = generate_all(runner, _problems(), replace(SETTINGS, batch_size=3, refill=True))
+    tok = runner.tokenizer
+    prompts = [generation.chat_prompt(tok, p, SETTINGS.enable_thinking) for p in _problems()]
+    longest = max(len(tok(p, add_special_tokens=False).input_ids) for p in prompts)
+    budgeted = longest + SETTINGS.max_new_tokens
+    assert all(after <= budgeted for _, after, _, _ in calls)
+    assert any(before + SETTINGS.max_new_tokens > budgeted for before, _, _, _ in calls)
+    assert any(before > 2 * chunk for before, _, _, chunk in calls if chunk)
+    assert all(chunk == 5 for _, _, _, chunk in calls)
+    for g in refilled:
+        assert g == alone[g.task_id]
