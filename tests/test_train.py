@@ -10,7 +10,7 @@ from datasets import Dataset
 from transformers import Qwen3ForCausalLM
 
 from chained_transformer.model import ARMS
-from chained_transformer.train import IGNORE, main, make_batch, token_losses
+from chained_transformer.train import IGNORE, LossScale, main, make_batch, token_losses
 
 ROW = {
     "input_ids": [5, 6, 7, 8, 9, 10, 11],
@@ -57,8 +57,11 @@ def test_only_mode_is_refused_for_arms_without_mode_weights(tmp_path: Path, arm:
     assert not (tmp_path / "run").exists()
 
 
+@pytest.mark.parametrize("compute", ["bfloat16", "float16"])
 @pytest.mark.parametrize("arm", ARMS)
-def test_each_arm_trains_on_cpu(tiny_model: Qwen3ForCausalLM, tmp_path: Path, arm: str) -> None:
+def test_each_arm_trains_on_cpu(
+    tiny_model: Qwen3ForCausalLM, tmp_path: Path, arm: str, compute: str
+) -> None:
     base = tmp_path / "base"
     tiny_model.save_pretrained(base)
     rows = [
@@ -88,6 +91,8 @@ def test_each_arm_trains_on_cpu(tiny_model: Qwen3ForCausalLM, tmp_path: Path, ar
         "4",
         "--warmup",
         "1",
+        "--compute-dtype",
+        compute,
     ]
     if arm == "separate":
         argv += ["--mode", "code"]
@@ -111,3 +116,13 @@ def test_complete_only_keeps_complete_rows(tiny_model: Qwen3ForCausalLM, tmp_pat
     for extra, kept in (([], 3), (["--complete-only"], 1)):
         main([*argv, *extra])
         assert json.loads((out / "config.json").read_text())["rows"] == kept
+
+
+def test_loss_scale_halves_on_overflow_and_grows_after_good_steps() -> None:
+    scale = LossScale(value=1024.0, growth_interval=2)
+    scale.update(finite=False)
+    assert (scale.value, scale.skipped) == (512.0, 1)
+    scale.update(finite=True)
+    assert scale.value == 512.0
+    scale.update(finite=True)
+    assert scale.value == 1024.0

@@ -78,7 +78,7 @@ def _route(
         idx = (ids == m).nonzero().squeeze(1)
         if idx.numel() == 0:
             continue
-        out = out.index_add(0, idx, fn(m, flat.index_select(0, idx)))
+        out = out.index_add(0, idx, fn(m, flat.index_select(0, idx)).to(out.dtype))
     return out.reshape(shape)
 
 

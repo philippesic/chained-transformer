@@ -124,6 +124,27 @@ def make_optimizer(
     )
 
 
+@dataclass
+class LossScale:
+    value: float = 2.0**14
+    growth_interval: int = 200
+    good_steps: int = 0
+    skipped: int = 0
+
+    def update(self, finite: bool) -> None:
+        if finite:
+            self.good_steps += 1
+            if self.good_steps % self.growth_interval == 0:
+                self.value *= 2.0
+            return
+        self.value /= 2.0
+        self.good_steps = 0
+        self.skipped += 1
+
+
+COMPUTE_DTYPES = {"bfloat16": torch.bfloat16, "float16": torch.float16}
+
+
 def set_lr(optimizer: Optimizer, lr: float) -> None:
     for group in optimizer.param_groups:
         if isinstance(group["lr"], torch.Tensor):
@@ -197,6 +218,7 @@ def main(
     parser.add_argument("--optim-chunk", type=int, default=DEFAULT_CHUNK)
     parser.add_argument("--freeze-embeddings", action="store_true")
     parser.add_argument("--attention", choices=ATTENTION_CHOICES, default="auto")
+    parser.add_argument("--compute-dtype", choices=list(COMPUTE_DTYPES), default="bfloat16")
     args = parser.parse_args(argv)
     if (args.arm == "separate") != (args.mode is not None):
         parser.error("--mode is required for --arm separate and only valid there")
@@ -231,6 +253,8 @@ def main(
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = make_optimizer(params, args.optimizer, args.lr, args.optim_chunk, args.seed)
     only_label = parse_mode(args.mode)
+    half = args.compute_dtype == "float16"
+    scale = LossScale() if half else None
 
     counts = param_counts(model)
     meta = {"args": {k: str(v) for k, v in vars(args).items()}, "params": counts, "rows": len(rows)}
@@ -259,22 +283,31 @@ def main(
             if built.routing is not None:
                 built.routing.set(batch.mode_ids)
             phase("forward")
-            losses = token_losses(model, batch, args.loss_chunk)
-            valid = batch.targets.reshape(-1) != IGNORE
-            loss = losses[valid].sum() / valid.sum().clamp(min=1)
-            aux = moe_aux_loss(model)
-            if aux is not None:
-                loss = loss + args.aux_coef * aux
-                aux_total += float(aux.detach())
+            with torch.autocast(
+                device.type, dtype=torch.float16, enabled=half, cache_enabled=False
+            ):
+                losses = token_losses(model, batch, args.loss_chunk)
+                valid = batch.targets.reshape(-1) != IGNORE
+                loss = losses[valid].sum() / valid.sum().clamp(min=1)
+                aux = moe_aux_loss(model)
+                if aux is not None:
+                    loss = loss + args.aux_coef * aux
+                    aux_total += float(aux.detach())
             phase("backward")
-            (loss / args.grad_accum).backward()
+            (loss * (scale.value if scale else 1.0) / args.grad_accum).backward()
             labels = batch.target_labels.reshape(-1)[valid]
             sums.index_add_(0, labels, losses[valid].detach())
             counts_by_label.index_add_(0, labels, torch.ones_like(labels, dtype=sums.dtype))
             tokens += batch.input_ids.numel()
         phase("optimizer")
+        if scale is not None:
+            torch._foreach_mul_([p.grad for p in params if p.grad is not None], 1.0 / scale.value)
         grad_norm = float(torch.nn.utils.clip_grad_norm_(params, 1.0))
-        optimizer.step()
+        finite = math.isfinite(grad_norm)
+        if scale is not None:
+            scale.update(finite)
+        if finite or scale is None:
+            optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         phase("idle")
         sync(device)
@@ -292,6 +325,7 @@ def main(
             "loss_by_label": by_label,
             "aux": round(aux_total / args.grad_accum, 4),
             "grad_norm": round(grad_norm, 4),
+            "loss_scale": scale.value if scale else None,
             "lr": lr,
             "tokens": tokens,
             "truncated_rows": truncated,
@@ -321,6 +355,8 @@ def main(
         "optimizer": args.optimizer,
         "attention": attention_backend(model),
         "attention_math_fallbacks": len(FALLBACKS),
+        "compute_dtype": args.compute_dtype,
+        "skipped_steps": scale.skipped if scale else 0,
     }
     (args.out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print("training complete", json.dumps(summary))

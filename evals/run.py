@@ -28,7 +28,7 @@ BENCHMARKS: dict[str, Benchmark] = {
     "humanevalplus": humanevalplus.BENCHMARK,
     "livecodebench": livecodebench.BENCHMARK,
 }
-DTYPES = {"float32": torch.float32, "bfloat16": torch.bfloat16}
+DTYPES = {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}
 REPORT_VERSION = 1
 SAMPLE_SALT = "chained-transformer-eval-sample-v1"
 RESUME_IGNORES = ("batch_size", "refill")

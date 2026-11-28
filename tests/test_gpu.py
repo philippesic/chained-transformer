@@ -161,8 +161,11 @@ def test_moe_matches_base_over_a_long_batched_greedy_run_in_bf16() -> None:
     assert torch.equal(got.sequences, want.sequences)
 
 
+@pytest.mark.parametrize("compute", ["bfloat16", "float16"])
 @pytest.mark.parametrize("arm", ARMS)
-def test_each_arm_trains_on_cuda_without_math_attention(tmp_path: Path, arm: str) -> None:
+def test_each_arm_trains_on_cuda_without_math_attention(
+    tmp_path: Path, arm: str, compute: str
+) -> None:
     base = tmp_path / "base"
     _model().save_pretrained(base)
     row = {
@@ -175,7 +178,7 @@ def test_each_arm_trains_on_cuda_without_math_attention(tmp_path: Path, arm: str
     out = tmp_path / "run"
     argv = ["--arm", arm, "--data", str(tmp_path / "data"), "--out", str(out)]
     argv += ["--steps", "3", "--seq-len", "64", "--device", "cuda", "--base", str(base)]
-    argv += ["--lora-rank", "4", "--warmup", "1"]
+    argv += ["--lora-rank", "4", "--warmup", "1", "--compute-dtype", compute]
     if arm == "separate":
         argv += ["--mode", "code"]
     earlier = len(FALLBACKS)
