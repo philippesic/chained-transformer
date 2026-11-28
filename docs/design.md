@@ -189,6 +189,12 @@ Memory choices, all aimed at the 11 GB 2080 Ti (compute capability 7.5):
   and loss buffers do not leave the cache fragmented around the gradients allocated amid them.
 - `--freeze-embeddings` freezes the tied embedding/LM head (155.6M parameters), saving its
   gradient and optimizer state.
+- `--compute-dtype float16` runs the forward and backward under fp16 autocast while the weights,
+  gradients and 8-bit AdamW stay bf16, with a dynamic loss scale (starts at 2^14, halves and
+  skips the step on a non-finite gradient, doubles after 200 good steps; logged as
+  `loss_scale`, skips as `skipped_steps` in `summary.json`). Turing has fp16 but no bf16 tensor
+  cores, and its fused attention takes fp16, so this is about 3.3 times faster there at the
+  same loss; Qwen3's largest activation (about 8,100) fits fp16. Default `bfloat16`.
 
 `chained_transformer/memory.py` estimates each arm's memory by phase (weights, gradients,
 optimizer state, saved activations, layer backward, loss backward, optimizer step) for the
@@ -221,3 +227,13 @@ deleted.
 
 These use our own generation and scorers rather than lm-eval-harness, because every arm must
 generate through the mode hook (or the separate-models loop).
+
+`--decode graph` (greedy only, single model) keeps the refill scheduler, stopping rules and
+mode tracking but replaces `generate`'s decode loop: after a chunked prefill into the
+preallocated cache, each step runs a hand-written Qwen3 decode
+(`chained_transformer/graph_decode.py`) captured once per 512-token cache-length bucket as a
+CUDA graph and replayed. Attention is the fused memory-efficient kernel with grouped queries
+over the cache up to the bucket; mode MLPs run every mode on the batch's rows and keep each
+row's own (`moe` runs every expert and mixes the chosen ones as `MoEMLP.mix` does). On CPU it
+reproduces `generate` token for token; on the GPU it differs from `generate` only by kernel
+rounding. Use it with `--dtype float16` on Turing, where bf16 matmuls are emulated.
