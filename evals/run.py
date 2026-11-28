@@ -357,6 +357,12 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--no-refill", action="store_true", help="plain static batches")
     parser.add_argument(
+        "--decode",
+        choices=["hf", "graph"],
+        default="hf",
+        help="graph: greedy decode steps replayed as CUDA graphs over a preallocated cache",
+    )
+    parser.add_argument(
         "--stop-loops",
         action="store_true",
         help="end a response once its last 768 tokens repeat exactly with a period of at most 256",
@@ -405,6 +411,7 @@ def main(argv: list[str] | None = None) -> None:
         enable_thinking=not args.no_thinking,
         refill=not args.no_refill,
         stop_loops=args.stop_loops,
+        decode=args.decode,
     )
     sources = parse_sources(args.source)
     sample = parse_sample(args.sample, args.benchmarks)

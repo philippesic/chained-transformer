@@ -13,7 +13,7 @@ from transformers import GenerationConfig, Qwen3Config, Qwen3ForCausalLM
 from chained_transformer.attention import FALLBACKS, use_attention
 from chained_transformer.model import ARMS
 from chained_transformer.optim import BLOCK, ChunkedAdamW8bit
-from chained_transformer.surgery import SurgeryConfig, apply_surgery, moe_aux_loss
+from chained_transformer.surgery import SurgeryConfig, Variant, apply_surgery, moe_aux_loss
 from chained_transformer.train import main
 
 pytestmark = [
@@ -187,3 +187,32 @@ def test_each_arm_trains_on_cuda_without_math_attention(
     assert len(records) == 3 and all(math.isfinite(r["loss"]) for r in records)
     summary = json.loads((out / "summary.json").read_text())
     assert summary["attention_math_fallbacks"] == earlier, FALLBACKS[earlier:]
+
+
+@pytest.mark.parametrize("variant", [None, "full", "lora", "moe"])
+def test_captured_graph_decode_matches_eager(tmp_path: Path, variant: Variant | None) -> None:
+    from chained_transformer.generate import TokenTexts, mode_tracking
+    from chained_transformer.graph_decode import greedy_generate
+    from evals.generation import _StopOrRefill, load_runner
+    from tools.tiny_checkpoint import build
+
+    runner = load_runner(str(build(tmp_path / "m", variant)), None, None, torch.float32, "cuda")
+    model, tok = runner.models[0], runner.tokenizer
+    texts = TokenTexts.from_tokenizer(tok)
+    prompts = ["Please reason step by step.", "import sys", "What is 2+2?"]
+    enc = tok(prompts, return_tensors="pt", padding=True)
+    ids, mask = enc.input_ids.to(CUDA), enc.attention_mask.to(CUDA)
+
+    def run(capture: bool) -> list[list[int]]:
+        stop = _StopOrRefill(ids.shape[1], [40] * 3, [10**6], -1, CUDA)
+        if runner.routing is None:
+            out = greedy_generate(model, ids, mask, 40, 0, stop, capture=capture)
+        else:
+            with mode_tracking(model, runner.routing, texts) as hook:
+                out = greedy_generate(
+                    model, ids, mask, 40, 0, stop, runner.routing, hook, capture=capture
+                )
+        rows: list[list[int]] = out.tolist()
+        return rows
+
+    assert run(capture=True) == run(capture=False)

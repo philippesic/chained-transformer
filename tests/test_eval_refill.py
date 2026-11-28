@@ -7,6 +7,7 @@ from typing import Any, cast
 import pytest
 import torch
 
+from chained_transformer.surgery import Variant
 from evals import generation
 from evals.generation import Generation, GenSettings, Runner, generate_all, load_runner
 from evals.types import Problem
@@ -246,3 +247,35 @@ def test_loop_stop_cuts_a_repeating_row_where_the_repeat_is_proven(
         assert g.stopped == ("loop" if proven and proven[0] < 80 else None) and not g.finished
         cut += g.stopped == "loop"
     assert 0 < cut < len(runs[True])
+
+
+@pytest.fixture(scope="module")
+def arm_runners(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, Runner]]:
+    root = tmp_path_factory.mktemp("graph")
+    variants: dict[str, Variant | None] = {
+        "plain": None,
+        "full": "full",
+        "lora": "lora",
+        "moe": "moe",
+    }
+    yield {
+        arm: load_runner(str(build(root / arm, v)), None, None, torch.float32, "cpu")
+        for arm, v in variants.items()
+    }
+
+
+@pytest.mark.parametrize("arm", ["plain", "full", "lora", "moe"])
+def test_graph_decode_matches_hf_generate(
+    arm_runners: dict[str, Runner], arm: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = arm_runners[arm]
+    stop = _stop_token(runner, monkeypatch)
+    monkeypatch.setattr(generation, "_eos_ids", lambda tok: [stop])
+    batched = replace(SETTINGS, batch_size=3, refill=True)
+    want, _ = generate_all(runner, _problems(), batched)
+    got, perf = generate_all(runner, _problems(), replace(batched, decode="graph"))
+    assert perf["refill"] and perf["generate_calls"] > 2
+    by_id = {g.task_id: g for g in want}
+    assert any(g.finished for g in got) and any(g.switches for g in got) or arm == "plain"
+    for g in got:
+        assert g == by_id[g.task_id]

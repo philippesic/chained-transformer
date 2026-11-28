@@ -21,6 +21,7 @@ from chained_transformer.attention import FALLBACKS, use_attention
 from chained_transformer.cache import roomy_cache
 from chained_transformer.checkpoint import load_checkpoint
 from chained_transformer.generate import TokenTexts, generate_separate_models, mode_tracking
+from chained_transformer.graph_decode import greedy_generate
 from chained_transformer.modes import MODE_NAMES, Mode
 from chained_transformer.surgery import Routing
 from evals.types import Problem
@@ -50,6 +51,7 @@ class GenSettings:
     enable_thinking: bool = True
     refill: bool = True
     stop_loops: bool = False
+    decode: str = "hf"
 
 
 @dataclass(frozen=True)
@@ -408,7 +410,9 @@ def _generate_refill(
             "stopping_criteria": StoppingCriteriaList([stop]),
             "cache": roomy_cache(width + room),
         }
-        if runner.routing is None:
+        if settings.decode == "graph":
+            out = _graph_decode(runner, texts, inputs, room, pad)
+        elif runner.routing is None:
             out = model.generate(**inputs)
         else:
             with mode_tracking(model, runner.routing, texts):
@@ -423,6 +427,18 @@ def _generate_refill(
                 on_done(_finish(slot, finished, texts, tok, "loop" if looped else None))
                 pool.remove(slot)
     return calls
+
+
+def _graph_decode(
+    runner: Runner, texts: TokenTexts, inputs: dict[str, Any], room: int, pad: int
+) -> torch.Tensor:
+    model = runner.models[0]
+    stop = inputs["stopping_criteria"][0]
+    args = (model, inputs["input_ids"], inputs["attention_mask"], room, pad, stop)
+    if runner.routing is None:
+        return greedy_generate(*args)
+    with mode_tracking(model, runner.routing, texts) as hook:
+        return greedy_generate(*args, routing=runner.routing, hook=hook)
 
 
 def _generate_separate(
@@ -520,8 +536,10 @@ def generate_all(
         if on_done is not None:
             on_done(g)
 
+    if settings.decode == "graph" and (settings.do_sample or runner.separate):
+        raise ValueError("--decode graph is greedy and single-model; pass --greedy, not --separate")
     refill = settings.refill and not runner.separate
-    refill = refill and (len(problems) > step or settings.stop_loops)
+    refill = refill and (len(problems) > step or settings.stop_loops or settings.decode == "graph")
     rows = min(AUTO_BATCH_CAP, len(problems)) if settings.batch_size == 0 else step
     calls = 0
     fallbacks = len(FALLBACKS)
