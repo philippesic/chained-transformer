@@ -269,6 +269,12 @@ def run_benchmark(
         def save(g: Generation) -> None:
             sink.write(json.dumps(asdict(g)) + "\n")
             sink.flush()
+            have.add(g.task_id)
+            print(
+                f"answered {name} {len(have)}/{len(loaded.problems)} "
+                f"tokens={g.new_tokens} finished={g.finished}",
+                flush=True,
+            )
 
         fresh, perf = generate_all(runner, todo, settings, save)
         sink.close()
